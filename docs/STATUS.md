@@ -71,15 +71,15 @@ Design questions to settle at the start of Phase 1, before coding:
 
 ## Open questions for the owner
 
-1. **Only a chequing account is tracked.** Several spec features are about
-   *other* account types: credit card ↔ chequing transfer pairing, and
-   pending→posted card tips (Phase 3). They'll still be built and tested
-   against fake fixture data (and in the Phase 8 demo), but won't be
-   exercised by real data unless a card or savings account is added. Keep
-   them as specced, or re-scope Phase 3 toward chequing-specific cases
-   (e-Transfers, bill payments, pending debit holds)?
-2. Production deployment target for the Phase 8 demo (Fly.io, Render, a VPS, or
+1. Production deployment target for the Phase 8 demo (Fly.io, Render, a VPS, or
    local-only). This doesn't block anything until Phase 8.
+
+## Resolved
+
+- **Phase 3 scope with only a chequing account** (resolved 2026-09-22): keep
+  the card and transfer features as specced (tested on fake fixtures), and
+  **add** Interac e-Transfers (including cancelled ones), bill payments, and
+  pending debit holds. See [SPEC.md, Phase 3](SPEC.md#phase-3-turning-evidence-into-entries).
 
 ## Known issues and tech debt
 

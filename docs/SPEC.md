@@ -19,7 +19,8 @@ the app shows exactly which transactions explain the gap.
 
 | Question | Answer | Consequence |
 |---|---|---|
-| Accounts tracked | RBC chequing only, for now | The schema supports many bank accounts, but the only real data is one chequing account. See the open question in STATUS.md about the card and transfer features in Phase 3. |
+| Accounts tracked | RBC chequing only, for now | The schema supports many bank accounts, but the only real data is one chequing account. |
+| Phase 3 scope | Keep the card and transfer features as specced, **and** add chequing-specific flows | Transfer pairing and card pending→posted are built and tested against fake fixtures. E-Transfers, bill payments and pending debit holds are added because they are what the real chequing data contains. |
 | Currencies | CAD only | The ledger is single-currency. Each ledger account still records its currency, so a USD account can be added later without rewriting history. |
 | Dev machine | Ubuntu (Windows 11 in the meantime) | Scripts are bash plus a Makefile. WSL2 works the same way. |
 | Review flow | One PR per phase | Each phase ends with a PR and a summary. The next phase starts only after the owner reviews it. |
@@ -138,6 +139,32 @@ Fake RBC-format CSV fixtures cover these edge cases.
   The app reports whether the ledger matches and, if not, which rows explain
   the difference.
 
+Chequing-specific flows (added with the owner in Phase 0, because the real
+data is a chequing account). Exact RBC descriptions for each are verified
+against real exports in Phase 2, not assumed.
+
+- **Interac e-Transfers.** Recognize sent and received e-Transfers and
+  extract the counterparty name where the description shows it. A received
+  e-Transfer can be matched to a friend's open receivable (Phase 4 builds on
+  this). Otherwise it is categorized by rules like any other row. A sent
+  e-Transfer that is later **cancelled or declined** comes back as a
+  separate credit. The two are paired and net to zero, so they don't count
+  as spending or income. Any e-Transfer fee is its own expense line.
+- **Bill payments.** Online bill payments to a payee (phone, hydro, a credit
+  card issued by another bank) are recognized and categorized by payee via
+  rules. Paying a credit card that reckon doesn't track goes to a dedicated
+  `liability:untracked-cards` account rather than to spending, so card
+  purchases aren't counted as spending at the moment they're paid off.
+  (This is a design question to confirm when Phase 3 starts.)
+- **Pending debit holds.** A debit purchase can first appear as a pending
+  hold, most often at gas stations and hotels (a $100 hold that later posts
+  at $43.20), and sometimes the hold is simply released and never posts. The
+  hold is recorded as a provisional entry. When the posted transaction
+  arrives, the hold is reversed and the posted amount recorded. A hold that
+  drops off with no posting is reversed on its own. Holds are mostly visible
+  in screenshots (Phase 5), since CSV exports may list only posted
+  transactions (verify in Phase 2).
+
 ### Phase 4: Shared expenses and receivables
 
 Split a transaction: a $120 dinner becomes $30 `expense:food` plus $30 to each
@@ -191,8 +218,9 @@ per month (excluding transfers and friends' shares), receivables.
 
 A seed script with a fully fake dataset covering every hard case: duplicate
 same-day coffees, overlapping imports, a transfer, a pending-to-posted tip
-change, a split dinner and repayment, a USD purchase and refund, and
-overlapping screenshots. A README with the architecture, the invariants and
+change, a split dinner and repayment, a USD purchase and refund, a cancelled
+e-Transfer, a bill payment, a gas-station hold that posts lower and one that
+is released, and overlapping screenshots. A README with the architecture, the invariants and
 how each is enforced (types, database constraints, property tests), the dedupe
 and screenshot-alignment approaches, extraction accuracy results, and known
 limitations.
