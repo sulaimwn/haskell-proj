@@ -93,4 +93,5 @@ Design questions to settle at the start of Phase 1, before coding:
   formatting.
 - The first backend build takes 10–20 minutes (dependency compilation). CI
   caches the cabal store.
-- CI hasn't run on GitHub yet as of this writing. The first run is on the Phase 0 PR.
+- CI is green on GitHub for the Phase 0 PR. The first backend run took about 13 minutes
+  (cold dependency cache). Later runs reuse the cached cabal store.
