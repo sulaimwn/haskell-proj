@@ -1,0 +1,46 @@
+# Local development services. Start everything with `make dev`.
+name: reckon
+
+services:
+  # Postgres for development (database `reckon`) and tests (database `reckon_test`,
+  # created by db/init on first start).
+  db:
+    image: postgres:17
+    environment:
+      # Local-only credentials. The port is bound to 127.0.0.1, so nothing
+      # outside this machine can reach the database.
+      POSTGRES_USER: reckon
+      POSTGRES_PASSWORD: reckon
+      POSTGRES_DB: reckon
+    ports:
+      - "127.0.0.1:${RECKON_DB_PORT:-5433}:5432"
+    volumes:
+      - reckon-db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reckon -d reckon"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Runs SQL migrations from db/migrations. Not started by `docker compose up`;
+  # use `make migrate` (or `docker compose run --rm dbmate <command>`).
+  dbmate:
+    image: ghcr.io/amacneil/dbmate:2.36.0
+    profiles: ["tools"]
+    # Run as the host user so generated files (db/schema.sql, new migrations)
+    # are owned by you, not root. The Makefile exports these.
+    user: "${RECKON_UID:-1000}:${RECKON_GID:-1000}"
+    environment:
+      DATABASE_URL: postgres://reckon:reckon@db:5432/reckon?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      DBMATE_SCHEMA_FILE: /db/schema.sql
+      DBMATE_WAIT: "true"
+    volumes:
+      - ./db:/db
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  reckon-db-data:

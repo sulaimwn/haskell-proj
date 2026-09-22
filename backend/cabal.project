@@ -1,0 +1,13 @@
+packages: .
+
+-- Pin the Hackage snapshot so every machine (and CI) resolves the same
+-- dependency versions. cabal.project.freeze pins them exactly.
+-- To upgrade: bump this date, delete cabal.project.freeze, run `cabal freeze`.
+index-state: 2026-09-22T18:14:36Z
+
+tests: True
+
+-- aeson-typescript fails to compile against string-interpolate 1.x: its new
+-- ghc-hs-meta backend can't translate a `Proxy :: Proxy a` inside one of
+-- aeson-typescript's quasi-quotes. 0.3.x uses haskell-src-meta, which can.
+constraints: string-interpolate <1

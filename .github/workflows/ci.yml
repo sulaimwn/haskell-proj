@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHC_VERSION: "9.10.3"
+  CABAL_VERSION: "3.16.1.0"
+  DBMATE_IMAGE: ghcr.io/amacneil/dbmate:2.36.0
+
+jobs:
+  repo-hygiene:
+    name: Privacy guard and shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: No private data committed
+        run: scripts/check-private-data.sh --all
+      - name: shellcheck
+        run: shellcheck scripts/*.sh .githooks/pre-commit
+
+  backend:
+    name: Backend (build, test, codegen)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: reckon
+          POSTGRES_PASSWORD: reckon
+          POSTGRES_DB: reckon_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U reckon -d reckon_test"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://reckon:reckon@localhost:5432/reckon_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libpq (needed by persistent-postgresql)
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+
+      - uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: ${{ env.GHC_VERSION }}
+          cabal-version: ${{ env.CABAL_VERSION }}
+          cabal-update: true
+
+      - name: Restore dependency cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: cabal-${{ runner.os }}-ghc-${{ env.GHC_VERSION }}-${{ hashFiles('backend/cabal.project', 'backend/cabal.project.freeze', 'backend/reckon.cabal') }}
+          restore-keys: cabal-${{ runner.os }}-ghc-${{ env.GHC_VERSION }}-
+
+      - name: Build dependencies
+        working-directory: backend
+        run: cabal build all --only-dependencies
+
+      - name: Save dependency cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Build (warnings are errors)
+        working-directory: backend
+        run: cabal build all --ghc-options=-Werror
+
+      - name: Migrate test database
+        run: |
+          # dbmate treats an empty migrations directory as an error.
+          if ! compgen -G "db/migrations/*.sql" >/dev/null; then
+            echo "No migrations yet; nothing to apply"
+            exit 0
+          fi
+          docker run --rm --network host -v "$PWD/db:/db" \
+            -e DATABASE_URL="$TEST_DATABASE_URL" \
+            "$DBMATE_IMAGE" --migrations-dir /db/migrations --no-dump-schema --wait up
+
+      - name: Test
+        working-directory: backend
+        run: cabal test all --ghc-options=-Werror --test-show-details=direct
+
+      - name: Generated TypeScript is up to date
+        run: scripts/codegen.sh --check
+
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Installed by `make hooks` (and automatically by `make dev`), which points
+# git's core.hooksPath at this directory.
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check-private-data.sh" --staged

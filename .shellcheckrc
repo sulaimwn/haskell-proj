@@ -1,0 +1,2 @@
+# Resolve `source` directives relative to the script's own directory.
+source-path=SCRIPTDIR

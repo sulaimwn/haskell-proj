@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# Real financial data. NEVER commit these. See docs/PRIVACY.md.
+# The pre-commit hook and CI (scripts/check-private-data.sh) enforce this too.
+# ---------------------------------------------------------------------------
+/private/
+.env
+.env.*
+!.env.example
+
+# Haskell
+dist-newstyle/
+.ghc.environment.*
+
+# Node
+node_modules/
+
+# Editors and OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.swp
