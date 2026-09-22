@@ -1,0 +1,89 @@
+cabal-version: 3.8
+name:          reckon
+version:       0.1.0.0
+synopsis:      A personal double-entry ledger that reconciles to the cent against real bank statements
+license:       NONE
+build-type:    Simple
+
+-- Settings shared by every component below.
+common shared
+  default-language:   GHC2024
+  default-extensions:
+    DuplicateRecordFields
+    OverloadedRecordDot
+    OverloadedStrings
+
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wmissing-deriving-strategies
+    -Wpartial-fields -Wredundant-constraints -Wunused-packages
+
+  build-depends:      base >=4.20 && <5
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    Reckon.Api
+    Reckon.Api.JsonOptions
+    Reckon.Api.Types
+    Reckon.Api.TypeScript
+    Reckon.App
+    Reckon.Config
+    Reckon.Database
+    Reckon.Server
+
+  other-modules:   Paths_reckon
+  autogen-modules: Paths_reckon
+  build-depends:
+    , aeson
+    , aeson-typescript
+    , bytestring
+    , monad-logger
+    , mtl
+    , persistent-postgresql
+    , servant
+    , servant-server
+    , text
+    , unliftio
+    , wai
+
+-- The HTTP server. `make dev` runs this.
+executable reckon-server
+  import:         shared
+  hs-source-dirs: app
+  main-is:        Main.hs
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
+  build-depends:
+    , reckon
+    , wai-extra
+    , warp
+
+-- Writes the TypeScript API types for the frontend. `make codegen` runs this.
+executable reckon-codegen
+  import:         shared
+  hs-source-dirs: codegen
+  main-is:        Main.hs
+  build-depends:
+    , reckon
+    , text
+
+test-suite reckon-test
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Main.hs
+  other-modules:
+    Reckon.Api.TypesSpec
+    Reckon.ConfigSpec
+    Reckon.ServerSpec
+    Reckon.TestSupport
+
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
+  build-depends:
+    , aeson
+    , bytestring
+    , hspec
+    , hspec-wai
+    , reckon
+    , text
