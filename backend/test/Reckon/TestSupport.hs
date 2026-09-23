@@ -2,14 +2,43 @@
 module Reckon.TestSupport
   ( makeTestEnv
   , makeEnvWithUnreachableDatabase
+  , runTestDatabase
+  , uniqueSuffix
+  , shouldFailMentioning
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as ByteString.Char8
+import Data.Text (Text)
+import Database.Persist.Sql (Single (..), SqlPersistT, rawSql, runSqlPool)
 import Reckon.App (AppEnv (..))
 import Reckon.Config (Config (..))
 import Reckon.Database (createDatabasePool)
 import System.Environment (lookupEnv)
+import Test.Hspec (Expectation, expectationFailure, shouldContain)
+
+-- | Runs a database action in its own transaction, committed at the end,
+-- the same way the application does.
+runTestDatabase :: AppEnv -> SqlPersistT IO a -> IO a
+runTestDatabase env action = runSqlPool action env.databasePool
+
+-- | A string no other test has used. The journal is append-only, so tests
+-- can't clean up after themselves. Instead, every test names its accounts
+-- with a fresh suffix and only looks at those accounts.
+uniqueSuffix :: SqlPersistT IO Text
+uniqueSuffix = do
+  [Single suffix] <- rawSql "SELECT replace(gen_random_uuid()::text, '-', '')" []
+  pure suffix
+
+-- | Expects the action to throw, with the given text in the error. Used to
+-- check that the database rejects something, and for the right reason.
+shouldFailMentioning :: IO a -> String -> Expectation
+shouldFailMentioning action expectedFragment = do
+  result <- try @SomeException action
+  case result of
+    Left exception -> show exception `shouldContain` expectedFragment
+    Right _ -> expectationFailure ("expected an error mentioning " <> show expectedFragment <> ", but it succeeded")
 
 -- | An environment connected to the test database named by
 -- @TEST_DATABASE_URL@. @make test@ creates and migrates that database.

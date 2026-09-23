@@ -121,5 +121,13 @@ docs/        see the table above
   `cabal freeze` in `backend/` and commit `cabal.project.freeze`.
 - Generated TS records look like `type Foo = IFoo` + `interface IFoo`
   (aeson-typescript convention). Import the plain `Foo`.
+- The journal is append-only: tests can't delete rows. Give every test its
+  own accounts via `uniqueSuffix` (test/Reckon/TestSupport.hs). `make test`
+  recreates `reckon_test` on each run; `make check` doesn't need to.
+- Database rules must be tested by bypassing Haskell (raw SQL via
+  `rawExecute`/`rawSql`), and a transaction must COMMIT for the deferred
+  balance trigger to fire. Don't test it inside a rolled-back transaction.
+- `Reckon.Database.Schema` must match the SQL by hand. When a migration
+  changes a table, update the entity in the same PR.
 - `OverloadedRecordDot` needs the record's fields in scope: import
   `AppEnv (..)`, not just `AppEnv`, to use `env.databasePool`.
