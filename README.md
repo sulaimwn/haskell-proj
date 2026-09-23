@@ -23,8 +23,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 |---|---|---|
 | 0 | Environment and skeleton | ✅ done |
 | 1 | Ledger core: balanced, append-only journal, property tests | ✅ done |
-| 2 | RBC CSV import with idempotent, overlap-safe dedupe | next |
-| 3 | Evidence → entries, transfer pairing, statement reconciliation | |
+| 2 | RBC CSV import with idempotent, overlap-safe dedupe | ✅ done |
+| 3 | Evidence → entries, transfer pairing, statement reconciliation | next |
 | 4 | Shared expenses and receivables | |
 | 5 | Screenshot ingestion with Claude | |
 | 6 | Frontend | |
@@ -38,9 +38,11 @@ system libraries. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has copy-paste
 setup steps.
 
 ```bash
+git clone https://github.com/sulaimwn/haskell-proj.git && cd haskell-proj
 make dev    # Postgres + migrations + API on :8080 + frontend on :5173
 make test   # backend tests
 make check  # everything CI runs
+make import file=private/rbc-export.csv   # import a real RBC CSV export
 ```
 
 Open <http://localhost:5173>. The first build compiles all Haskell

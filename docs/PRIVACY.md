@@ -24,7 +24,8 @@ are non-negotiable.
 | `.gitignore` | `/private/`, `.env`, `.env.*` (except `.env.example`) never show up as untracked files to add. |
 | Pre-commit hook (`.githooks/pre-commit`) | Blocks a commit that stages anything under `private/`, any `.env` file, or any data-shaped file (`.csv`, `.ofx`, `.qfx`, `.pdf`, `.png`, `.jpg`, ...) outside the allowed folders (`fixtures/`, `docs/images/`, `frontend/public/`, `frontend/src/assets/`). `make dev` and `make hooks` install it. |
 | CI (`privacy-guard` job) | The same check over every tracked file, so a commit made without the hook still fails CI. |
-| Code (from Phase 2) | Parsers truncate account numbers to the last 4 digits at the boundary. Tests assert this. |
+| Code | The RBC parser keeps only the last 4 digits (`Last4` can't hold more), `bank_accounts.last4` has a 4-digit CHECK, and a test scans every stored column after an import to prove the full number appears nowhere. |
+| Workflow | `make import` warns if the file isn't under `private/`. |
 
 The hook runs **before** the commit, which matters: once something reaches a
 public GitHub repo, you have to treat it as leaked even if you delete it

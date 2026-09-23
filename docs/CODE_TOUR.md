@@ -21,6 +21,7 @@ This grows with every phase. Every new module gets a section.
 - [`Reckon.Server`: handlers](#reckonserver-handlers)
 - [`codegen/Main.hs` and `Reckon.Api.TypeScript`](#codegenmainhs-and-reckonapitypescript)
 - [The ledger (Phase 1)](#the-ledger-phase-1)
+- [Importing bank exports (Phase 2)](#importing-bank-exports-phase-2)
 - [Tests](#tests)
 - [Frontend](#frontend)
 - [Glossary](#glossary)
@@ -29,12 +30,13 @@ This grows with every phase. Every new module gets a section.
 
 ## The shape of the backend
 
-`backend/reckon.cabal` defines four **components** that share one library:
+`backend/reckon.cabal` defines five **components** that share one library:
 
 | Component | Directory | What it is |
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -441,6 +443,114 @@ lines for any entry not created in the current transaction.
 
 ---
 
+## Importing bank exports (Phase 2)
+
+Read in order: `Bank` → `Import.RbcCsv` → `Import.Dedupe` → `Import`, then
+`cli/Main.hs`. The first three are **pure** (no database, no IO), which is
+why most of Phase 2's tests need no database at all.
+
+### `Reckon.Bank`: `Last4`
+
+The same smart-constructor idea as `BalancedLines`, applied to privacy.
+`Last4`'s constructor is hidden, and `mkLast4` accepts exactly four digits,
+so a value of type `Last4` *cannot* hold a full account number.
+`last4FromAccountNumber` is the only door in from a raw account number, and
+it throws everything but the last four digits away.
+
+**Q: How do you guarantee you never store a full account number?**
+A: Four layers. The type can't hold more than four digits. The parser
+converts at the boundary, so the full number never gets past it. The column
+has a CHECK constraint. And a test imports a file and scans every stored
+column (as JSON) for the full number.
+
+### `Reckon.Import.RbcCsv`: parsing
+
+- `parseRbcCsv :: ByteString -> Either [CsvError] [RbcRow]`. `Either` with a
+  *list* of errors: parsing doesn't stop at the first bad row, so the user
+  sees every problem at once. `partitionEithers` splits the per-row results
+  into failures and successes.
+- **cassava** does the CSV mechanics (quotes, commas inside quotes, CRLF).
+  The code maps columns by *header name*, so the parser doesn't depend on
+  column order.
+- `parseCents` turns `"-4.50"` into `Cents (-450)` by splitting on the dot
+  and working with digit strings. There is no `read :: Double` anywhere,
+  because a float would bring back the rounding error `Cents` exists to
+  avoid.
+- `let problem :: Text -> Either CsvError a` needs a type signature. GHC2024
+  turns on `MonoLocalBinds`, which stops local definitions that use outer
+  variables (here `line`) from being generalized. The signature makes
+  `problem` usable at every result type.
+
+### `Reckon.Import.Dedupe`: the dedupe logic
+
+The core of Phase 2 (DECISIONS D029, D030).
+
+```haskell
+assignOccurrences :: [IncomingRow payload] -> [(RowKey, IncomingRow payload)]
+planImport :: [StoredRow storedId] -> [IncomingRow payload] -> ImportPlan storedId payload
+```
+
+- **`assignOccurrences`** is a left fold carrying a `Map (Day, Fingerprint) Int`
+  of how many of each row it has seen so far. The second identical coffee gets
+  occurrence 2.
+- **`planImport`** is set arithmetic. `rowsToAdd` are incoming keys not in the
+  stored set. *Absent* rows are stored keys not in the incoming set. Absent
+  rows are then paired with added rows of the same amount on the same day
+  (`PossibleDuplicate`), and whatever is left on an interior day becomes
+  `MissingFromNewerExport`.
+- **Type parameters instead of concrete types:** `StoredRow storedId` and
+  `IncomingRow payload` don't care what the id or payload is. In production,
+  `storedId` is a database key (`RawBankRowId`) and `payload` is the parsed CSV
+  row. In tests they're `Int` and `()`. This is **parametric polymorphism**:
+  the planner *can't* depend on database details, because it doesn't know
+  what the type is. The same function runs in both places.
+
+**Q: Walk me through two identical coffees in overlapping exports.**
+A: Export 1 has two rows with the same date and fingerprint. They get
+occurrences 1 and 2, and both keys are stored. Export 2 has the same two
+rows, which get the same two keys, so `rowsToAdd` is empty. If export 1 was
+taken mid-day and caught only one, it stored key #1. Export 2's key #2 is new
+and gets added. Nothing depends on row order, only on how many identical rows
+there are.
+
+**Q: What if the bank changes a description between exports?**
+A: The fingerprint changes, so the new version looks like a new row and gets
+added. The old version is now absent from a day the new export covers. The
+planner sees an absent row and an added row with the same amount on the same
+day, and flags them as a `possible_duplicate` for a person to resolve. It
+never guesses, and never deletes.
+
+### `Reckon.Import`: the database side
+
+`importRbcCsv` runs in one transaction (the caller's `runSqlPool`):
+
+1. SHA-256 the bytes (`cryptohash-sha256`). If `import_batches` already has
+   that hash, return `AlreadyImported`.
+2. Parse. On failure, return the errors. Nothing has been written.
+3. Insert the batch. Then, per account: find or register the bank account;
+   **`SELECT ... FOR UPDATE`** its row, so a concurrent import of the same
+   account waits; load stored rows in the file's date range; run
+   `planImport`; insert rows, review items and coverage.
+
+`rawSql` returns rows (it's used for the lock, which returns the id).
+`rawExecute` is for statements that return nothing. persistent refuses to run
+a row-returning `SELECT` through `rawExecute`, which was a real bug caught by
+the tests.
+
+**Q: What stops two simultaneous imports from both adding the same row?**
+A: The row lock makes the second one wait, and then plan against what the
+first committed. Even without the lock, the UNIQUE dedupe key would reject a
+duplicate insert and roll the second transaction back.
+
+### `cli/Main.hs`
+
+`reckon-cli import-rbc-csv FILE`: load config, make a one-connection pool,
+read the file, run `importRbcCsv` in one transaction, print
+`renderImportOutcome`. `make import file=...` builds and runs it
+(`scripts/import.sh`).
+
+---
+
 ## Tests
 
 `backend/test/Main.hs` runs every spec with **hspec**, a BDD-style framework
@@ -498,6 +608,19 @@ is compared against a model simple enough to be obviously right. To confirm
 the test has teeth, a planted bug (`<` instead of `<=` in the as-of filter)
 was introduced, the property failed, and the bug was reverted.
 
+Phase 2 adds:
+
+| Spec | What it proves |
+|---|---|
+| `Import.RbcCsvSpec` | The parser on the fixtures: fields, quoted commas, **only the last 4 digits survive**, BOM/CRLF/blank lines, columns found by name, every bad row reported by line number. `parseCents` exactness, including a **round-trip property** over random amounts. |
+| `Import.DedupeSpec` | Fingerprint normalization, occurrence numbering, each planning rule by example, and the main **property**: a random true history (full of identical same-day rows), cut into overlapping exports shuffled within each day, some with a partial last day, imported in random order. The result is exactly the true history, with no review flags, and re-importing everything changes nothing. Planting a bug (all occurrences = 1) makes it fail. |
+| `ImportSpec` | Against the database: first import registers the account; the same file twice is a no-op; the overlapping fixture gives exactly 5 added, 4 present, 1 possible duplicate, 1 missing, with the right rows linked; a malformed file saves nothing. Raw SQL: a duplicate key is rejected, evidence can't be updated or deleted, and no stored column contains the full account number. |
+
+The dedupe property is worth being able to explain. It describes the whole
+problem ("whatever the bank gives me, as long as it's truthful, I end up
+with exactly the real transactions") and checks it against thousands of
+generated scenarios, including ones nobody would think to write by hand.
+
 Tests never delete anything (the journal forbids it). Each test makes its
 own accounts with a unique suffix, and `make test` recreates the test
 database on each run (DECISIONS D026).
@@ -548,4 +671,7 @@ exhaustiveness checking across the language boundary.
 | **persistent** | Database library: connection pools, typed entities, and queries (with **esqueleto** for SQL joins, from Phase 1). |
 | **Smart constructor** | A function that validates input before building a value, where the raw constructor is hidden, so every value of the type is valid. |
 | **Property-based test** | A test that checks a rule over many randomly generated inputs, shrinking any failure to a minimal example. |
+| **Fingerprint** | The normalized description + cheque number + amount that identifies "the same transaction" on a given day. |
+| **Occurrence** | The position of a row among identical rows (same date and fingerprint) in one file: 1, 2, 3, ... |
+| **Parametric polymorphism** | A function that works for any type in a type variable (`StoredRow storedId`) and so can't depend on what that type is. |
 | **Double-entry** | Every transaction is recorded as lines that sum to zero: whatever one account gains, others lose. |

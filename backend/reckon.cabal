@@ -29,9 +29,13 @@ library
     Reckon.Api.Types
     Reckon.Api.TypeScript
     Reckon.App
+    Reckon.Bank
     Reckon.Config
     Reckon.Database
     Reckon.Database.Schema
+    Reckon.Import
+    Reckon.Import.Dedupe
+    Reckon.Import.RbcCsv
     Reckon.Ledger
     Reckon.Ledger.AccountType
     Reckon.Ledger.Entry
@@ -43,7 +47,11 @@ library
   build-depends:
     , aeson
     , aeson-typescript
+    , base16-bytestring
     , bytestring
+    , cassava
+    , containers
+    , cryptohash-sha256
     , esqueleto
     , monad-logger
     , mtl
@@ -54,6 +62,7 @@ library
     , text
     , time
     , unliftio
+    , vector
     , wai
 
 -- The HTTP server. `make dev` runs this.
@@ -66,6 +75,18 @@ executable reckon-server
     , reckon
     , wai-extra
     , warp
+
+-- Command-line tools (importing a CSV). `make import file=...` runs this.
+executable reckon-cli
+  import:         shared
+  hs-source-dirs: cli
+  main-is:        Main.hs
+  build-depends:
+    , bytestring
+    , filepath
+    , persistent
+    , reckon
+    , text
 
 -- Writes the TypeScript API types for the frontend. `make codegen` runs this.
 executable reckon-codegen
@@ -84,6 +105,9 @@ test-suite reckon-test
   other-modules:
     Reckon.Api.TypesSpec
     Reckon.ConfigSpec
+    Reckon.Import.DedupeSpec
+    Reckon.Import.RbcCsvSpec
+    Reckon.ImportSpec
     Reckon.Ledger.EntrySpec
     Reckon.LedgerSpec
     Reckon.ServerSpec

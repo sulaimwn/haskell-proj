@@ -1,0 +1,6 @@
+"Account Type","Account Number","Transaction Date","Cheque Number","Description 1","Description 2","CAD$","USD$"
+Chequing,00000-0001234,1/2/2026,,"PAYROLL DEPOSIT","EXAMPLE EMPLOYER INC",1500.00,
+Chequing,00000-0001234,2/30/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,1/3/2026,,"Interac purchase","COFFEE CO",-4.5.0,
+Chequing,00000-0001234,1/4/2026,,"Interac purchase","US STORE",,-12.00
+Brokerage,00000-0001234,1/5/2026,,"Something","",-1.00,

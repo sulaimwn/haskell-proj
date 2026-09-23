@@ -39,6 +39,17 @@ install_git_hooks() {
   fi
 }
 
+# The journal and imported evidence are append-only (even DELETE and
+# TRUNCATE are rejected), so the test database can't be cleaned between runs.
+# Recreate it from scratch instead: dropping a whole database bypasses table
+# triggers. Assumes migrations have been applied (scripts/migrate.sh).
+recreate_test_database() {
+  local test_database_url="postgres://reckon:reckon@db:5432/reckon_test?sslmode=disable"
+  log "Recreating the test database"
+  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
+  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
+}
+
 require_dev_tools() {
   require_command docker "Install Docker Engine: see docs/DEVELOPMENT.md."
   require_command cabal "Install GHC and cabal with ghcup: see docs/DEVELOPMENT.md."

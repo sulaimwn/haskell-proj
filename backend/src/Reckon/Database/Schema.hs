@@ -10,12 +10,16 @@
 -- describe it, so persistent can generate typed rows, keys and query
 -- columns, and they must be kept in step with the SQL by hand. Columns the
 -- database fills in on its own (@created_at@, @created_in_transaction@)
--- are left out; persistent never selects or inserts them.
+-- are left out; persistent never selects or inserts them. Columns stored as
+-- text with a CHECK constraint (account_type, account_kind, kind) use
+-- Haskell types with hand-written text conversions (DECISIONS D028).
 module Reckon.Database.Schema where
 
 import Data.Text (Text)
 import Data.Time (Day)
 import Database.Persist.TH (mkPersist, persistLowerCase, share, sqlSettings)
+import Reckon.Bank (BankAccountKind, Last4)
+import Reckon.Import.Dedupe (Fingerprint, ReviewItemKind)
 import Reckon.Ledger.AccountType (AccountType)
 import Reckon.Money (Cents)
 
@@ -43,5 +47,53 @@ JournalLine sql=journal_lines
   entryId JournalEntryId
   ledgerAccountId LedgerAccountId
   amountCents Cents
+  deriving Show Eq
+
+BankAccount sql=bank_accounts
+  institution Text
+  accountKind BankAccountKind
+  last4 Last4
+  nickname Text
+  ledgerAccountId LedgerAccountId
+  UniqueBankAccount institution accountKind last4
+  deriving Show Eq
+
+ImportBatch sql=import_batches
+  source Text
+  fileSha256 Text
+  fileName Text
+  UniqueImportBatchFile fileSha256
+  deriving Show Eq
+
+ImportBatchCoverage sql=import_batch_coverage
+  batchId ImportBatchId
+  bankAccountId BankAccountId
+  firstDate Day
+  lastDate Day
+  rowsInFile Int
+  rowsAdded Int
+  Primary batchId bankAccountId
+  deriving Show Eq
+
+RawBankRow sql=raw_bank_rows
+  bankAccountId BankAccountId
+  firstSeenBatchId ImportBatchId
+  transactionDate Day
+  description1 Text sql=description_1
+  description2 Text sql=description_2
+  chequeNumber Text
+  amountCents Cents
+  fingerprint Fingerprint
+  occurrence Int
+  UniqueRawBankRow bankAccountId transactionDate fingerprint occurrence
+  deriving Show Eq
+
+ImportReviewItem sql=import_review_items
+  batchId ImportBatchId
+  bankAccountId BankAccountId
+  transactionDate Day
+  kind ReviewItemKind
+  rawBankRowId RawBankRowId
+  relatedRawBankRowId RawBankRowId Maybe
   deriving Show Eq
 |]
