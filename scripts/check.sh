@@ -20,6 +20,7 @@ log "Backend: build with warnings as errors"
 (cd backend && cabal build all --ghc-options=-Werror)
 
 scripts/migrate.sh >/dev/null
+recreate_test_database
 log "Backend: tests"
 (cd backend && cabal test all --ghc-options=-Werror --test-show-details=direct)
 

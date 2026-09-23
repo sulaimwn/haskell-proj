@@ -4,14 +4,17 @@ module Reckon.TestSupport
   , makeEnvWithUnreachableDatabase
   , runTestDatabase
   , uniqueSuffix
+  , uniqueLast4
   , shouldFailMentioning
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as ByteString.Char8
+import Data.Int (Int64)
 import Data.Text (Text)
-import Database.Persist.Sql (Single (..), SqlPersistT, rawSql, runSqlPool)
+import Data.Text qualified as Text
+import Database.Persist.Sql (Single (..), SqlPersistT, rawExecute, rawSql, runSqlPool)
 import Reckon.App (AppEnv (..))
 import Reckon.Config (Config (..))
 import Reckon.Database (createDatabasePool)
@@ -30,6 +33,17 @@ uniqueSuffix :: SqlPersistT IO Text
 uniqueSuffix = do
   [Single suffix] <- rawSql "SELECT replace(gen_random_uuid()::text, '-', '')" []
   pure suffix
+
+-- | Four digits no other test in this run has used, for tests that import
+-- the fixture exports under their own bank account. Counts up from 0001 in
+-- the (freshly recreated) test database.
+uniqueLast4 :: SqlPersistT IO Text
+uniqueLast4 = do
+  -- (Quiet the "already exists, skipping" notice on every call after the first.)
+  rawExecute "SET LOCAL client_min_messages TO warning" []
+  rawExecute "CREATE SEQUENCE IF NOT EXISTS test_last4_sequence" []
+  [Single next] <- rawSql "SELECT nextval('test_last4_sequence')" []
+  pure (Text.justifyRight 4 '0' (Text.pack (show (next `mod` 10000 :: Int64))))
 
 -- | Expects the action to throw, with the given text in the error. Used to
 -- check that the database rejects something, and for the right reason.

@@ -7,14 +7,7 @@ source "$(dirname "$0")/lib.sh"
 
 load_env
 scripts/migrate.sh >/dev/null
-
-# The journal is append-only (even DELETE and TRUNCATE are rejected), so the
-# test database can't be cleaned between runs. Recreate it from scratch
-# instead: dropping a whole database bypasses table triggers.
-log "Recreating the test database"
-test_database_url="postgres://reckon:reckon@db:5432/reckon_test?sslmode=disable"
-docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
-docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
+recreate_test_database
 
 # Pass each argument through separately so quoted patterns keep their spaces.
 hspec_arguments=()

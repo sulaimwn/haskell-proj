@@ -73,6 +73,10 @@ only in application code.
 As built so far, see [ARCHITECTURE.md](ARCHITECTURE.md#data-model-phase-1).
 One refinement: `journal_entries` has no `status` column, because the journal is
 append-only. Confirmation of provisional entries will be its own table (DECISIONS D025).
+Phase 2 added `bank_accounts`, `import_batches`, `import_batch_coverage`, `raw_bank_rows`
+and `import_review_items`. `raw_bank_rows` uses `occurrence` instead of
+`position_within_day`, and omits status and screenshot-only columns for now
+(DECISIONS D029, D035).
 
 | Table | Purpose |
 |---|---|

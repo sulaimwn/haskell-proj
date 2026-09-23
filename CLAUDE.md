@@ -91,6 +91,7 @@ make test       # backend tests against reckon_test
 make check      # everything CI runs, run before pushing
 make codegen    # after changing backend/src/Reckon/Api/Types.hs
 make migration name=...   # new SQL migration; then `make migrate`
+make import file=private/export.csv   # import a real RBC CSV
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -99,7 +100,7 @@ Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
 ## Layout
 
 ```
-backend/     Haskell: src/Reckon/* (library), app/ (server), codegen/, test/
+backend/     Haskell: src/Reckon/* (library), app/ (server), cli/ (reckon-cli), codegen/, test/
 frontend/    React + Vite; src/api/generated.ts is GENERATED
 db/          migrations/ (schema source of truth), schema.sql (generated dump)
 fixtures/    fake data only
@@ -123,11 +124,19 @@ docs/        see the table above
   (aeson-typescript convention). Import the plain `Foo`.
 - The journal is append-only: tests can't delete rows. Give every test its
   own accounts via `uniqueSuffix` (test/Reckon/TestSupport.hs). `make test`
-  recreates `reckon_test` on each run; `make check` doesn't need to.
+  and `make check` recreate `reckon_test` on each run.
 - Database rules must be tested by bypassing Haskell (raw SQL via
   `rawExecute`/`rawSql`), and a transaction must COMMIT for the deferred
   balance trigger to fire. Don't test it inside a rolled-back transaction.
 - `Reckon.Database.Schema` must match the SQL by hand. When a migration
   changes a table, update the entity in the same PR.
+- Import tests must not reuse a bank account: use `uniqueLast4` and
+  `fixtureFor last4 name` (ImportSpec) to rewrite the fixtures' fake account
+  number, otherwise a second test sees "already imported".
+- Imported evidence (`raw_bank_rows` etc.) is append-only too. A wrong import
+  is fixed by fixing the parser, `make db-destroy`, and re-importing from
+  `/private`.
+- Records sharing a field name (e.g. `transactionDate` on `RowKey` and
+  `IncomingRow`) can't use record-update syntax. Build with the constructor.
 - `OverloadedRecordDot` needs the record's fields in scope: import
   `AppEnv (..)`, not just `AppEnv`, to use `env.databasePool`.

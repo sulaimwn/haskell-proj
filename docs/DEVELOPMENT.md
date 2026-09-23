@@ -20,26 +20,35 @@ missing, but CI doesn't).
 
 ### 2. Haskell (GHC + cabal) via ghcup
 
+Run the installer on its own. It asks a few questions. The defaults are
+fine, including "Yes, prepend" when it offers to edit `~/.bashrc`.
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-# restart the shell (or `source ~/.ghcup/env`), then pin the versions this repo uses:
-ghcup install ghc 9.10.3 --set
-ghcup install cabal 3.16.1.0 --set
-ghcup install hls --set   # optional: Haskell Language Server for your editor
-cabal update
 ```
 
-For VS Code, install the "Haskell" extension. It uses the HLS that ghcup
-installed.
+Then load it into the current terminal and pin the versions this repo uses.
+If the installer already picked them, as it did in September 2026, these
+commands just confirm it:
+
+```bash
+source ~/.ghcup/env
+ghcup install ghc 9.10.3 --set
+ghcup install cabal 3.16.1.0 --set
+cabal update
+ghc --version     # The Glorious Glasgow Haskell Compilation System, version 9.10.3
+```
+
+Optional: `ghcup install hls --set` installs the Haskell Language Server. For
+VS Code, add the "Haskell" extension, which uses it.
 
 ### 3. Node.js 22
 
-Using nvm (the repo's `.nvmrc` pins the major version):
-
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-# restart the shell, then from the repo root:
-nvm install && nvm use
+export NVM_DIR="$HOME/.nvm"; source "$NVM_DIR/nvm.sh"
+nvm install 22
+node --version    # v22.x
 ```
 
 ### 4. Docker Engine
@@ -48,13 +57,31 @@ Follow <https://docs.docker.com/engine/install/ubuntu/>, then let your user run
 Docker without sudo:
 
 ```bash
-sudo usermod -aG docker "$USER"   # log out and back in afterwards
-docker run --rm hello-world        # should work without sudo
+sudo usermod -aG docker "$USER"
 ```
+
+**Log out and back in** so the group change applies, then check:
+`docker run --rm hello-world` (it should work without sudo).
 
 You don't need to install Postgres or dbmate. Both run in containers.
 
+### 5. Get the code
+
+```bash
+git clone https://github.com/sulaimwn/haskell-proj.git
+cd haskell-proj
+```
+
+Every `make` command below runs from this folder.
+
+**New terminals:** the ghcup and nvm installers add themselves to
+`~/.bashrc`, so a new terminal has `ghc`, `cabal` and `node` ready. In the
+terminal you ran the installers in, run
+`source ~/.ghcup/env; source ~/.nvm/nvm.sh` first.
+
 ## Running it
+
+From the `haskell-proj` folder:
 
 ```bash
 make dev
@@ -77,6 +104,29 @@ running; `make db-down` stops it.
 **The first build takes 10–20 minutes** because cabal compiles every Haskell
 dependency. After that, builds are incremental and take seconds.
 
+## Importing a real RBC export
+
+1. In RBC Online Banking, download your transactions as CSV.
+2. Save the file inside `private/` in this folder, e.g.
+   `private/rbc-2026-01.csv`. `private/` is gitignored, and the pre-commit
+   hook refuses to commit anything in it.
+3. Run:
+
+   ```bash
+   make import file=private/rbc-2026-01.csv
+   ```
+
+The summary shows, per account, how many rows were added, how many were
+already there (from an overlapping earlier export), and anything flagged
+for review. Importing the same file twice does nothing. The first import of
+an account registers it (e.g. "RBC Chequing ending 1234") with a matching
+ledger account. Only the last 4 digits of the account number are stored.
+
+If the file is rejected, the error lists each bad line. The parser's column
+layout is an assumption until it has been checked against a real export
+(docs/STATUS.md). Paste the error, with no amounts or names, to whoever is
+working on the parser.
+
 ## Everyday commands
 
 Run `make` with no arguments to see them all.
@@ -89,6 +139,7 @@ Run `make` with no arguments to see them all.
 | `make codegen` | Regenerate `frontend/src/api/generated.ts` after changing API types |
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |
 | `make migrate` | Apply pending migrations to the dev and test databases |
+| `make import file=private/export.csv` | Import an RBC CSV export into the dev database |
 | `make db-psql` | psql shell on the dev database |
 | `make db-down` | Stop Postgres (data is kept in a Docker volume) |
 | `make db-destroy` | Delete the database volume, including everything imported (asks first) |
@@ -125,6 +176,8 @@ merged; add a new one.
 
 | Symptom | Fix |
 |---|---|
+| `make: *** No rule to make target 'dev'` | You're not in the repo folder. `cd haskell-proj` first. |
+| `ghcup: command not found`, `cabal: command not found` or `nvm: command not found` right after installing | The installer only updated `~/.bashrc`. Open a new terminal, or run `source ~/.ghcup/env; source ~/.nvm/nvm.sh`. |
 | `cannot find -lgmp` (or `-lffi`, `-lz`) while building | Install the system packages from step 1. |
 | `pg_config` / `libpq-fe.h` not found | `sudo apt-get install libpq-dev` |
 | `permission denied ... docker.sock` | Add yourself to the `docker` group (step 4) and log in again. |

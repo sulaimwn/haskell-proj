@@ -1,0 +1,10 @@
+"Account Type","Account Number","Transaction Date","Cheque Number","Description 1","Description 2","CAD$","USD$"
+Chequing,00000-0001234,2/13/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,2/6/2026,,"e-Transfer received","SAM EXAMPLE",25.00,
+Chequing,00000-0001234,2/2/2026,,"PAYROLL DEPOSIT","EXAMPLE EMPLOYER INC",1500.00,
+Chequing,00000-0001234,1/31/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,1/31/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,1/22/2026,,"Interac purchase - GROCERY STORE #0012","",-63.08,
+Chequing,00000-0001234,1/20/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,1/20/2026,,"Interac purchase","COFFEE CO",-4.50,
+Chequing,00000-0001234,1/15/2026,,"Interac purchase","COFFEE CO, DOWNTOWN",-4.50,

@@ -282,3 +282,106 @@ text itself.
 types need explicit casts. Plain text columns are also easy to read in psql.
 **Risk:** The two definitions can drift. Every table is exercised through
 persistent by the test suite, so a mismatch fails the tests.
+
+### D029: Dedupe imports by (account, date, fingerprint, occurrence) (Phase 2, accepted with the owner)
+
+**Context:** Bank CSVs have no transaction IDs. Exports overlap, and identical
+transactions on the same day (two $4.50 coffees) are real and must not be
+collapsed.
+**Decision:** A row's *fingerprint* is its normalized descriptions (upper-case,
+whitespace collapsed), cheque number and amount. Identical rows on the same
+day are numbered in file order: occurrence 1, 2, and so on. The key
+`(bank_account_id, transaction_date, fingerprint, occurrence)` is UNIQUE in
+the database, and an import adds only keys not already stored. See
+`Reckon.Import.Dedupe`.
+**Why counting and not row position:** The order of *different* transactions
+within a day isn't guaranteed to be stable between exports. Counting identical
+rows is unaffected by order.
+**Evidence it works:** A hedgehog property generates a true history full of
+same-day duplicates, cuts it into overlapping exports (shuffled within days,
+some with a partial last day), imports them in random order, and checks that
+the result equals the true history exactly with nothing flagged. Planting a
+bug (every occurrence = 1) makes it fail.
+**Alternatives:** Treating `(date, description, amount)` as unique would
+collapse duplicates. Hashing each row plus its position within the day would
+break when the order within a day changes. A running balance column would
+disambiguate perfectly, but RBC's CSV doesn't include one.
+
+### D030: Unclear cases are flagged for review, never guessed (Phase 2, accepted with the owner)
+
+**Decision:** Two review kinds, stored in `import_review_items`:
+- `possible_duplicate`: on the same day, a stored row is absent from the newer
+  export and a new row with the same amount appeared (probably renamed by the
+  bank). The new row is still added. A person decides.
+- `missing_from_newer_export`: a stored row is absent from a day the newer
+  export fully covers.
+
+The first and last days of an export are *edge days*. An export taken mid-day
+may legitimately miss that day's later rows, so absences there are not
+flagged. Nothing is ever deleted automatically.
+
+### D031: Imported evidence is append-only, like the journal (Phase 2, accepted)
+
+**Decision:** `raw_bank_rows`, `import_batches`, `import_batch_coverage` and
+`import_review_items` reject UPDATE and DELETE (and TRUNCATE for rows), via
+the same kind of trigger as the journal. Resolving a review item (Phase 6)
+will add a row to a resolutions table, not edit the item.
+**Consequence:** If a parser bug imports something wrongly, the fix is to
+correct the parser, `make db-destroy`, and re-import the original files from
+`/private`. For a personal ledger whose sources are kept, that's acceptable,
+and it keeps "what the bank said" trustworthy.
+
+### D032: A bank account is registered on its first import (Phase 2, accepted)
+
+**Decision:** The first time an account (kind + last 4 digits) appears in an
+export, reckon creates the `bank_accounts` row and the ledger account that
+mirrors it: `asset:rbc-chequing-1234`, `asset:rbc-savings-1234`, or
+`liability:rbc-credit-card-1234`. The import summary says "newly registered".
+**Why:** There's no UI yet, and asking the owner to pre-register accounts with
+SQL would be error-prone. The account kind in the export is enough to choose
+the ledger account type.
+
+### D033: Imports into one account are serialized with a row lock (Phase 2, accepted)
+
+**Decision:** Each account's import runs `SELECT ... FOR UPDATE` on its
+`bank_accounts` row before reading the stored rows it plans against. A second
+concurrent import of the same account waits until the first commits. The
+UNIQUE dedupe key is the backstop, since the database refuses a duplicate even
+if the lock were removed.
+
+### D034: The CSV parser is by-name, exact, and all-or-nothing (Phase 2, accepted)
+
+**Decision:** Columns are located by header name, so reordered or extra
+columns still parse. Amounts are parsed from text into integer cents with no
+floating point. More than two decimals, exponents and currency symbols are
+rejected. Files are read as UTF-8, falling back to Latin-1, with a leading BOM
+dropped. Any bad row rejects the whole file, and every problem is listed with
+its line number. USD-only rows are rejected (D023). Only the last 4 digits of
+the account number survive parsing (`Last4` can only hold 4 digits).
+**Unverified:** The assumed column names come from the spec and have not yet
+been checked against a real RBC export (docs/STATUS.md).
+
+### D035: `raw_bank_rows` starts smaller than the spec's suggestion (Phase 2, accepted)
+
+**Decision:** No `status`, `is_pending`, `running_balance_cents`,
+`confidence`, `source` or `position_within_day` columns yet.
+- `status` (unmatched/matched/...) would need UPDATE (see D031). Matching
+  will be a links table in Phase 3.
+- `position_within_day` is replaced by `occurrence` (D029).
+- Pending flags, running balances, confidence and source come from
+  screenshots (Phase 5) and will be added with them.
+
+### D036: Phase 2's interface is a CLI (`make import`) (Phase 2, accepted)
+
+**Decision:** `reckon-cli import-rbc-csv FILE`, wrapped as
+`make import file=private/...`, runs one import in one transaction and prints
+a summary. An HTTP upload endpoint arrives with the import page in Phase 6.
+**Why:** It lets the owner try real exports now, with the least new surface
+area.
+
+### D037: Tests import fixtures under a unique account number (Phase 2, accepted)
+
+**Decision:** `ImportSpec` rewrites the fixtures' fake account number to end in
+digits from `uniqueLast4` (a sequence in the test database), so each test
+gets its own bank account, and its own file hash, in the shared test
+database. `make check` now recreates the test database too, like `make test`.
