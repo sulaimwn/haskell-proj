@@ -22,6 +22,7 @@ This grows with every phase. Every new module gets a section.
 - [`codegen/Main.hs` and `Reckon.Api.TypeScript`](#codegenmainhs-and-reckonapitypescript)
 - [The ledger (Phase 1)](#the-ledger-phase-1)
 - [Importing bank exports (Phase 2)](#importing-bank-exports-phase-2)
+- [Posting and reconciliation (Phase 3)](#posting-and-reconciliation-phase-3)
 - [Tests](#tests)
 - [Frontend](#frontend)
 - [Glossary](#glossary)
@@ -36,7 +37,7 @@ This grows with every phase. Every new module gets a section.
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
-| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2). |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -547,7 +548,186 @@ duplicate insert and roll the second transaction back.
 `reckon-cli import-rbc-csv FILE`: load config, make a one-connection pool,
 read the file, run `importRbcCsv` in one transaction, print
 `renderImportOutcome`. `make import file=...` builds and runs it
-(`scripts/import.sh`).
+(`scripts/import.sh`). Phase 3 adds more commands; see below.
+
+---
+
+## Posting and reconciliation (Phase 3)
+
+Read in order: `Posting.Classify` → `Posting` → `Reconcile.Explain` →
+`Reconcile`, then the new commands in `cli/Main.hs`. Same split as Phase 2:
+the two modules that make decisions are **pure**, and the two that touch
+the database only load, call the pure function, and write.
+
+### `Reckon.Posting.Classify`: what is each row?
+
+```haskell
+planPosting ::
+  (Ord rowId, Eq account) =>
+  WellKnownAccounts account -> [Rule account] -> [EvidenceRow rowId account] -> PostingPlan rowId account
+```
+
+Input: every unposted row, plus rows already posted on a guess (marked
+`alreadyPosted`). Output: a `PostingPlan` with one `PlannedPosting` per row
+to post (its `Classification` and counter account) and the rows
+`leftForReview` with a `ReviewReason`.
+
+The steps, in order:
+
+1. Zero-amount rows → review (a journal line can't be zero).
+2. **Cancellation pairs** (`isCancellationPair`): same account, opposite
+   amounts, within 45 days, one mentions CANCEL/REVERS/RETURN/DECLIN/REFUND.
+3. **Transfer pairs** (`isTransferPair`) among what's left: different
+   accounts, opposite amounts, within 5 days.
+4. Every other row on its own (`classifySingle`): the first matching rule,
+   else `looksLikeCardPayment`, else uncategorized by sign.
+
+Ideas worth pointing at:
+
+- **`pairUniquely`** takes the pairing rule as a function argument
+  (`EvidenceRow -> EvidenceRow -> Bool`), so steps 2 and 3 share it. It
+  builds a `Map` from each row to its candidates, and accepts a pair only
+  when it is **mutual**: each row's one and only candidate is the other.
+  Everything with candidates but no mutual pair is returned as ambiguous.
+  One function, two relations: that's what higher-order functions are for.
+- **The same parametric-polymorphism trick as `planImport`:** `rowId` and
+  `account` are type variables. In production they're `RawBankRowId` and
+  `LedgerAccountId`; in `ClassifySpec` they're `Int` and `Text`, so a test
+  can compare a counter account with the plain string `"asset:clearing"`.
+- **`Classification` is a sum type**, and `CancelledPairWith rowId` and
+  `TransferWith rowId` carry the partner's id. The summary counts and the
+  tests pattern-match on it, so adding a new kind of row is a compile error
+  everywhere it isn't handled (with the warnings on).
+- **Guesses are data, not special cases.** An already-posted row
+  participates in pairing like any other. A pair where one side is
+  `alreadyPosted` produces a posting with `replacesExistingEntry = True`;
+  a pair of two already-posted rows produces nothing.
+
+**Q: Why not just pair a −$200 with the nearest +$200?**
+A: Because a wrong pairing is silent and a missing one is loud. If a
+transfer has two possible matches, picking one could hide a real refund as a
+transfer, and nobody would notice. Leaving all three rows unposted makes the
+reconciliation report point straight at them. The rule "each is the other's
+only candidate" is the simplest one that never guesses.
+
+**Q: Why check cancellations before transfers?**
+A: "Cancelled" in a description is stronger evidence than an amount
+matching in another account. An e-Transfer sent and cancelled is −$30 then
++$30 in the same account. If a +$30 also appeared on a card that week,
+transfer pairing alone would see an ambiguity. Taking the cancellation
+first removes both rows before transfers are considered.
+
+### `Reckon.Posting`: the database side
+
+`postPendingRows` is short because the decisions are elsewhere:
+
+1. `wellKnownAccounts` finds or creates `asset:clearing`,
+   `liability:untracked-cards`, `expense:uncategorized`,
+   `income:uncategorized`. `WellKnownAccounts` is built with `<$>` and
+   `<*>`: four actions in the database monad, combined into one record
+   (**applicative style**).
+2. Load the unposted rows, and the repairable ones (posted on a guess, dated
+   within 45 days before the earliest unposted row).
+3. `planPosting`.
+4. For each planned posting: if it replaces a guess, `postReversal` the old
+   entry **on its original date**, then `postRow`.
+
+`postRow` builds two `EntryLine`s, passes them through the same smart
+constructors as any other entry (`mkBalancedLines`, `mkNewJournalEntry`),
+posts, and inserts the `JournalEntryEvidence` link. The `error` branch is
+unreachable (the lines negate each other and zero rows never get here), and
+the comment says why.
+
+"Unposted" isn't a column. It's a query: *no evidence link to an entry that
+hasn't been reversed*. These `NOT EXISTS` queries use `rawSql`, because
+they're clearer in SQL than in esqueleto, and the columns come back as a
+tuple of `Single` values that `toEvidenceRow` turns into a record.
+
+`postRowManually` (the `post-row` command) and `addCategorizationRule`
+return `Either` a small error type, and `cli/Main.hs` turns each error into a
+sentence. The library never prints.
+
+**Q: What happens if you run `make post` twice?**
+A: The second run loads no unposted rows, so it plans nothing and writes
+nothing. There's a test that compares the entry count before and after.
+
+**Q: The Visa export arrives a week after the chequing one. What happens to
+the payment already posted as "untracked card"?**
+A: It's loaded as a repairable row. The new Visa row's only candidate is
+it, and vice versa, so they pair. The old entry is reversed with the same
+date it had, which is why the chequing balance on every date is unchanged,
+and the row is re-posted against clearing. Nothing is edited. A test checks
+the balance before and after, and dating the reversal a day late makes it
+fail (it was tried).
+
+### `Reckon.Reconcile.Explain`: why don't the numbers match?
+
+```haskell
+explainReconciliation :: ReconciliationInputs -> [Finding]
+coverageGaps :: Day -> Day -> [(Day, Day)] -> [(Day, Day)]
+```
+
+Pure. `ReconciliationInputs` has everything the database knows about one
+account on one date (both balances, unposted rows, possible duplicates, the
+opening balance date, the date ranges imports covered). The result is a
+list of `Finding`s, a sum type with one constructor per cause.
+
+- A zero difference returns `[Reconciled]` and nothing else.
+- Otherwise each check is a **list comprehension with a guard**:
+  `[NoOpeningBalance difference | inputs.openingBalanceDate == Nothing]` is
+  either a one-element list or empty. `concat` joins them. It reads like
+  the list of rules it is.
+- If nothing applies: `[Unexplained difference]`. The report never goes
+  quiet about a gap.
+- `coverageGaps` walks the covered ranges sorted by start date, carrying the
+  first day not yet covered, and emits each gap as it passes it. There's a
+  property test: no day is both in a gap and covered, and no uncovered day is
+  missing from the gaps.
+
+### `Reckon.Reconcile`: opening balances, checkpoints, reports
+
+- `recordOpeningBalance` refuses a date on or after the account's first
+  imported transaction (that transaction would be counted twice) and a zero
+  amount. Recording a second one **reverses** the first; the table keeps
+  both, and the current one is the one whose entry isn't reversed.
+- **Signs at the edge.** You type what the statement shows: money in
+  chequing, or money *owed* on a card. `naturalBalance` (from Phase 1)
+  converts to raw debits and credits on the way in, and back on the way
+  out. So owing $250 on the Visa is stored as −25000 on a liability, and
+  there's a test for exactly that.
+- `recordCheckpoint` stores a statement balance (append-only, one per
+  account and date). `reconcileAccount` gathers the `ReconciliationInputs`
+  and calls `explainReconciliation`. `reconcileAllCheckpoints` does it for
+  every checkpoint, oldest first.
+
+**Q: What's the reconciliation identity, and why does it hold?**
+A: For every bank account and date: ledger balance = opening balance + sum
+of posted rows up to that date. It holds because every entry that touches a
+bank's ledger account is either the opening balance or the entry for
+exactly one of its rows, with the row's amount on that date, and re-posting
+reverses on the original date. The database tests check it on every day of
+the fixture, and a hedgehog property checks it for random exports. It's why
+the report can always find the cause: any gap must be in the evidence
+(unposted rows, a missing opening balance, a duplicate, or days nobody
+imported).
+
+**Q: Why a clearing account instead of one entry per transfer?**
+A: One entry has one date. A card payment leaves chequing on Feb 3 and
+lands on Feb 5, so with one entry, one of the two accounts disagrees with
+its own statement for two days. Two entries through `asset:clearing` keep
+both accounts right on every date, and clearing's balance is literally the
+money in transit. It's the standard "suspense account" technique, and
+DECISIONS D040 records the change from the spec.
+
+### The new CLI commands
+
+`cli/Main.hs` matches on the argument list (`["post-row", rowIdText,
+accountName] -> ...`), parses at the edge (`readMaybe`, `iso8601ParseM`,
+`parseCents`, `mkLast4`), and runs one transaction per command. `runOrDie`
+takes a transaction returning `Either Text Text`: print the message, or
+print the error and exit non-zero. `scripts/reckon.sh` builds and runs the
+CLI against the dev database, so every command is
+`scripts/reckon.sh COMMAND ...`.
 
 ---
 
@@ -621,9 +801,27 @@ problem ("whatever the bank gives me, as long as it's truthful, I end up
 with exactly the real transactions") and checks it against thousands of
 generated scenarios, including ones nobody would think to write by hand.
 
+Phase 3 adds:
+
+| Spec | What it proves |
+|---|---|
+| `Posting.ClassifySpec` | Pure planner: rule priority, untracked-card payments (and a rule overriding the guess), uncategorized by sign, zero rows to review, transfer pairing within 5 days and not beyond, ambiguity goes to review, late re-pairing, cancelled e-Transfers. A **property** over random mixes of rows: each new row is posted or left for review exactly once, already-posted rows only come back as half of a pair, pairs are mutual, and clearing nets to zero. |
+| `Reconcile.ExplainSpec` | Each `Finding` by example (reconciled, unposted rows close the gap, missing opening balance, duplicate, uncovered days, unexplained), and a **property** for `coverageGaps`. |
+| `PostingSpec` | Against the database with `fixtures/rbc/february-two-accounts.csv`: every row lands on the right account; posting twice changes nothing; each account's balance equals its posted rows **on every date**; a guessed card payment is re-posted as a transfer when the Visa export arrives, without changing the balance on its date; the full reconciliation walkthrough (gap explained, rows settled with `post-row`, then reconciled); opening balance rules, including a card's; raw-SQL tests that evidence links and checkpoints can't be changed. And a **property** that imports random two-account exports and checks the reconciliation identity and that clearing nets to zero. |
+
+**Mutation checks.** Removing the "mutual" condition from `pairUniquely`
+fails 5 tests. Dating the re-post reversal a day late fails the late-pairing
+test. Both were tried and reverted: the tests catch real mistakes.
+
 Tests never delete anything (the journal forbids it). Each test makes its
 own accounts with a unique suffix, and `make test` recreates the test
 database on each run (DECISIONS D026).
+
+Posting looks at **every** unposted row in the database, so `PostingSpec`
+goes further (D047): each test is a `Scenario` with its own account
+numbers, **its own year** (3000 + n, so no two tests' rows fall inside a
+pairing window), and its own tag in descriptions (so its rules only match
+its own rows). `forScenario` rewrites the fixture's text to match.
 
 ---
 
@@ -675,3 +873,12 @@ exhaustiveness checking across the language boundary.
 | **Occurrence** | The position of a row among identical rows (same date and fingerprint) in one file: 1, 2, 3, ... |
 | **Parametric polymorphism** | A function that works for any type in a type variable (`StoredRow storedId`) and so can't depend on what that type is. |
 | **Double-entry** | Every transaction is recorded as lines that sum to zero: whatever one account gains, others lose. |
+| **Evidence** | An imported bank row. Posting turns it into a journal entry and records the link in `journal_entry_evidence`. |
+| **Counter account** | The other side of a posted row's entry: a category, `asset:clearing`, `liability:untracked-cards`, etc. |
+| **Clearing account** | `asset:clearing`: where money sits between leaving one of my accounts and arriving in another (or between a payment and its cancellation). Zero once both sides have landed. |
+| **Posted / unposted** | A row is posted when it has an evidence link to an entry that hasn't been reversed. |
+| **Checkpoint** | A statement's closing balance for an account on a date. Reconciliation compares the ledger to it. |
+| **Opening balance** | The account's balance before its first imported transaction, entered from a statement, posted against `equity:opening-balance`. |
+| **Natural balance** | A balance with the sign a person expects: money in chequing, money owed on a card. The ledger stores raw debits (+) and credits (−). |
+| **Reconciliation identity** | Ledger balance = opening balance + posted rows, for every account and date. |
+| **Applicative style** | `Record <$> action1 <*> action2`: run several actions and combine their results into one value. |

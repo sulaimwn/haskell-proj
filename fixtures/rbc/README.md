@@ -7,6 +7,7 @@ tests replace it with a unique one per test.
 |---|---|
 | `january.csv` | Jan 2–31. Two identical $4.50 coffees on Jan 20; a quoted description containing a comma; an e-Transfer and a bill payment; **Jan 31 is partial** (one coffee, as if exported mid-day). |
 | `mid-january-to-mid-february.csv` | Jan 15–Feb 13, **newest first**, overlapping `january.csv`. Jan 20 has the same two coffees (nothing added); Jan 31 now has two coffees (one added); the Jan 22 grocery row was **renamed** (`#12` → `#0012`, flagged as a possible duplicate); the Jan 25 bookshop row is **missing** (flagged); three February rows are new. |
+| `february-two-accounts.csv` | **Two accounts in one export** (chequing `…1234` and a Visa `…9876`), for Phase 3 posting: payroll and a hydro bill (matched by rules in the tests), a **transfer** (chequing −$500 on Feb 3, Visa +$500 on Feb 5), a **cancelled e-Transfer** (−$30 then +$30), a payment to an **untracked Amex**, uncategorized purchases, and an **ambiguous transfer** (chequing −$200 with two +$200 Visa credits within 5 days). |
 | `malformed.csv` | One valid row and four broken ones (impossible date, bad amount, USD-only, unknown account type). The whole file must be rejected with line numbers. |
 
 Expected results are asserted in `backend/test/Reckon/ImportSpec.hs`.

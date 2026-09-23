@@ -385,3 +385,116 @@ area.
 digits from `uniqueLast4` (a sequence in the test database), so each test
 gets its own bank account, and its own file hash, in the shared test
 database. `make check` now recreates the test database too, like `make test`.
+
+### D038: Two defaults chosen without the owner's answer (Phase 3, accepted, owner may override)
+
+**Context:** Two questions from the end of Phase 2 were still open when the
+owner asked to keep going.
+**Decision:** Went with the recommendations, flagged in the Phase 3 PR:
+- A payment from chequing to a credit card reckon doesn't track goes to
+  `liability:untracked-cards`, not spending. The purchases on that card were
+  the spending, and counting the payment too would double-count them.
+- The ledger starts from an **opening balance** taken from a statement,
+  dated before the first imported transaction, posted against
+  `equity:opening-balance`.
+
+### D039: One bank row becomes exactly one journal entry (Phase 3, accepted)
+
+**Decision:** Every posted row gets its own entry: the row's amount on its
+bank's ledger account, balanced by a *counter account* (a category,
+`asset:clearing`, etc.). `journal_entry_evidence` records which row an
+entry came from.
+**Why:** It makes the **reconciliation identity** true by construction: a
+bank account's ledger balance on any date is the opening balance plus the
+sum of its posted rows up to that date. The database tests check it on every
+date, and a property checks it for random exports.
+
+### D040: Transfers go through a clearing account (Phase 3, accepted, supersedes the spec's "one entry per transfer")
+
+**Context:** A card payment leaves chequing on Feb 3 and reaches the card on
+Feb 5. The spec suggested one entry for both sides.
+**Decision:** Each leg is its own entry against `asset:clearing`: Feb 3
+(credit chequing, debit clearing) and Feb 5 (credit clearing, debit card).
+**Why:** A single entry has one date, so one of the two accounts would
+disagree with its own statement between Feb 3 and Feb 5. With a clearing
+account, each account matches its statement on every date, the transfer
+never touches spending, and clearing's balance is exactly the money in
+transit (zero once both legs have landed). This is the standard accounting
+treatment ("suspense" or "clearing" account). Cancelled e-Transfers and
+exact refunds use the same account and net to zero.
+
+### D041: Pairing must be unambiguous, or it goes to review (Phase 3, accepted)
+
+**Decision:** Two rows pair only if each is the other's *one and only*
+candidate. A transfer pair means different accounts, opposite amounts, and
+dates within 5 days. A cancellation or refund pair means the same account,
+opposite amounts, within 45 days, with "cancel", "revers", "return", "declin"
+or "refund" in one description. Cancellations are checked first. Anything
+with candidates but no unambiguous pair is left unposted with a reason.
+**Unverified:** The keyword lists, the card-payment guess ("PAYMENT" plus a
+card name), and the sign convention for RBC credit-card exports (purchases
+negative, payments positive) are assumptions until checked against real
+exports.
+
+### D042: Guesses are corrected by reversal and re-posting (Phase 3, accepted)
+
+**Context:** If the chequing export is imported before the card's, the
+payment to the card is first posted as "untracked card" (or uncategorized).
+When the card's export arrives, it's really half of a transfer.
+**Decision:** Rows posted on a guess (uncategorized, or untracked card) stay
+eligible for pairing. When a new row pairs with one, the old entry is
+**reversed** and the row re-posted against `asset:clearing`. The reversal is
+dated like the entry it reverses, so the account's balance on every date is
+unchanged. Nothing is edited (D021).
+
+### D043: Reconciliation explains the gap, not just its size (Phase 3, accepted)
+
+**Decision:** `reckon-cli checkpoint` / `make reconcile` compare the ledger
+with a statement balance. When they differ, the report looks for a cause:
+unposted rows whose sum is the gap, a single row equal to it, a missing
+opening balance, a possible duplicate equal to it, and days no export
+includes (coverage is inferred from each export's first and last
+transaction dates, since RBC's CSV doesn't state its range). When the
+balance matches, only "reconciled" is shown.
+
+### D044: Categorization rules are "description contains → account" for now (Phase 3, accepted)
+
+**Decision:** A `categorization_rules` table with upper-cased text,
+priority and account. The first match wins. Rules are configuration and may
+be edited, and they apply to rows posted *after* they're added. Phase 7
+replaces this with the rule language (and "preview against past
+transactions").
+
+### D045: Pending transactions and debit holds move to Phase 5 (Phase 3, accepted, scope change)
+
+**Context:** Phase 3 in the spec includes pending→posted handling and
+pending debit holds.
+**Decision:** Deferred to Phase 5. CSV exports contain only posted
+transactions, so pending rows only exist once screenshots are imported. The
+mechanism needed (reverse the provisional entry, post the final one) is the
+same reversal-and-re-post used by D042.
+
+### D046: `post-row` settles review items until the Phase 6 review queue (Phase 3, accepted)
+
+**Decision:** `scripts/reckon.sh post-row ROW_ID ACCOUNT` posts one
+unposted row against an account of your choice (e.g. both legs of an
+ambiguous transfer to `asset:clearing`). `make post` lists the row ids it
+left for review.
+
+### D047: Posting tests isolate themselves by year and tag (Phase 3, accepted)
+
+**Context:** `postPendingRows` looks at every unposted row in the database,
+and rules are global. Tests share one database.
+**Decision:** Each posting test (a `Scenario`) rewrites the fixture into
+its own account numbers, **its own year** (3000 + n), so pairing windows
+can't overlap between tests, and its own description tag, so its rules
+match only its rows. Assertions only look at the scenario's own rows.
+
+### D048: e-Transfer counterparty names are read in Phase 4 (Phase 3, accepted, scope change)
+
+**Context:** The Phase 3 spec says to extract the counterparty's name from
+e-Transfer descriptions.
+**Decision:** Moved to Phase 4. In Phase 3, e-Transfers are ordinary rows
+(categorized by rules, and cancelled ones paired). The name only matters
+once repayments are matched to a friend's receivable, which is Phase 4, and
+the real description format is still unverified.

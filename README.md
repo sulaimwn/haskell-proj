@@ -24,8 +24,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | 0 | Environment and skeleton | ✅ done |
 | 1 | Ledger core: balanced, append-only journal, property tests | ✅ done |
 | 2 | RBC CSV import with idempotent, overlap-safe dedupe | ✅ done |
-| 3 | Evidence → entries, transfer pairing, statement reconciliation | next |
-| 4 | Shared expenses and receivables | |
+| 3 | Evidence → entries, transfer pairing, statement reconciliation | ✅ done |
+| 4 | Shared expenses and receivables | next |
 | 5 | Screenshot ingestion with Claude | |
 | 6 | Frontend | |
 | 7 | Scheduled jobs and a categorization rule language | |
@@ -43,10 +43,15 @@ make dev    # Postgres + migrations + API on :8080 + frontend on :5173
 make test   # backend tests
 make check  # everything CI runs
 make import file=private/rbc-export.csv   # import a real RBC CSV export
+make post                                 # turn imported rows into journal entries
+scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43   # check against a statement
 ```
 
 Open <http://localhost:5173>. The first build compiles all Haskell
 dependencies and takes a while.
+
+The full import → post → reconcile walkthrough is in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#from-import-to-a-reconciled-ledger).
 
 ## Documentation
 

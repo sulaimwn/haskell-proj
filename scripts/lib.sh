@@ -46,8 +46,8 @@ install_git_hooks() {
 recreate_test_database() {
   local test_database_url="postgres://reckon:reckon@db:5432/reckon_test?sslmode=disable"
   log "Recreating the test database"
-  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
-  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
+  docker compose --progress quiet run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
+  docker compose --progress quiet run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
 }
 
 require_dev_tools() {

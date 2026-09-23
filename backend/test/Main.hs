@@ -3,6 +3,9 @@ module Main (main) where
 import Reckon.Api.TypesSpec qualified as TypesSpec
 import Reckon.Ledger.EntrySpec qualified as EntrySpec
 import Reckon.LedgerSpec qualified as LedgerSpec
+import Reckon.Posting.ClassifySpec qualified as ClassifySpec
+import Reckon.PostingSpec qualified as PostingSpec
+import Reckon.Reconcile.ExplainSpec qualified as ExplainSpec
 import Reckon.ConfigSpec qualified as ConfigSpec
 import Reckon.Import.DedupeSpec qualified as DedupeSpec
 import Reckon.Import.RbcCsvSpec qualified as RbcCsvSpec
@@ -19,4 +22,7 @@ main = hspec $ do
   describe "Reckon.Import.RbcCsv" RbcCsvSpec.spec
   describe "Reckon.Import.Dedupe" DedupeSpec.spec
   describe "Reckon.Import" ImportSpec.spec
+  describe "Reckon.Posting.Classify" ClassifySpec.spec
+  describe "Reckon.Reconcile.Explain" ExplainSpec.spec
+  describe "Reckon.Posting" PostingSpec.spec
   describe "Reckon.Server" ServerSpec.spec

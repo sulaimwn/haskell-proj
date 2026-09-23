@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 load_env
 require_command docker "Install Docker Engine: see docs/DEVELOPMENT.md."
 
-docker compose up -d --wait db >/dev/null
+docker compose --progress quiet up -d --wait db
 
 # dbmate treats an empty migrations directory as an error.
 if ! compgen -G "db/migrations/*.sql" >/dev/null; then
@@ -18,9 +18,9 @@ if ! compgen -G "db/migrations/*.sql" >/dev/null; then
 fi
 
 log "Migrating development database (reckon)"
-docker compose run --rm dbmate up
+docker compose --progress quiet run --rm dbmate up
 
 log "Migrating test database (reckon_test)"
-docker compose run --rm \
+docker compose --progress quiet run --rm \
   -e DATABASE_URL="postgres://reckon:reckon@db:5432/reckon_test?sslmode=disable" \
   dbmate --no-dump-schema up

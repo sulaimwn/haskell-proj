@@ -127,6 +127,90 @@ layout is an assumption until it has been checked against a real export
 (docs/STATUS.md). Paste the error, with no amounts or names, to whoever is
 working on the parser.
 
+## From import to a reconciled ledger
+
+Importing stores the bank's rows as evidence. These steps turn them into
+journal entries and check the result against a statement. Every command
+below is `scripts/reckon.sh COMMAND ...` (run it with no command to list
+them). It builds the CLI if needed and uses the dev database.
+
+1. **Import** each account's export (chequing, and any card you track):
+
+   ```bash
+   make import file=private/rbc-chequing-2026-02.csv
+   ```
+
+2. **Add rules** for things you recognize (optional, any time). A rule is
+   "description contains TEXT → account". It applies to rows posted after
+   it's added:
+
+   ```bash
+   scripts/reckon.sh add-rule PAYROLL income:job
+   scripts/reckon.sh add-rule "TIM HORTONS" expense:coffee
+   scripts/reckon.sh add-rule HYDRO expense:utilities 50     # lower priority number runs first (default 100)
+   ```
+
+   Account names start with `expense:`, `income:`, `asset:`, `liability:`,
+   `receivable:` or `equity:`. New ones are created as needed.
+
+3. **Post:**
+
+   ```bash
+   make post
+   ```
+
+   It prints what it did: rows categorized by a rule, transfer legs between
+   your accounts, cancelled e-Transfers, payments to cards reckon doesn't
+   track, and uncategorized rows. Rows it won't guess about are listed with
+   their id:
+
+   ```
+   Left for review (3), not posted:
+     #7  2026-02-14  -$200.00  Online Banking transfer - 5555  (looks like half of a transfer or cancellation, but which rows go together is ambiguous)
+   ```
+
+   Settle each one yourself, e.g. both legs of a transfer to the clearing
+   account, or a refund to income:
+
+   ```bash
+   scripts/reckon.sh post-row 7 asset:clearing
+   scripts/reckon.sh post-row 12 income:refunds
+   ```
+
+   Running `make post` again only posts what's new. Importing the other
+   account's export later is fine: a payment first posted as "untracked
+   card" is re-posted as a transfer once its other half arrives.
+
+4. **Opening balance**, once per account. Take the balance from a statement
+   dated **before** your first imported transaction (as the statement shows
+   it: money in the account, or owed on a card):
+
+   ```bash
+   scripts/reckon.sh opening-balance 1234 2026-01-31 1000.00
+   ```
+
+   Recording another one replaces it (the old entry is reversed).
+
+5. **Checkpoint** each statement's closing balance. It prints the
+   reconciliation straight away:
+
+   ```bash
+   scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43
+   ```
+
+   ```
+   RBC Chequing ending 1234, statement dated 2026-02-28:
+     statement $1552.43, ledger $1752.43
+     These 1 imported row(s) aren't posted yet, and posting them closes the gap exactly (make post says why each is waiting):
+       2026-02-14  -$200.00  Online Banking transfer - 5555
+   ```
+
+   Fix what it points at, then `make reconcile` re-checks every checkpoint.
+   The goal is **RECONCILED** on each one.
+
+`make db-psql` then `SELECT * FROM journal_entries ORDER BY id DESC LIMIT
+20;` shows the raw entries if you want to look.
+
 ## Everyday commands
 
 Run `make` with no arguments to see them all.
@@ -140,6 +224,9 @@ Run `make` with no arguments to see them all.
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |
 | `make migrate` | Apply pending migrations to the dev and test databases |
 | `make import file=private/export.csv` | Import an RBC CSV export into the dev database |
+| `make post` | Post imported rows to the journal (rules, transfers, cancellations); lists rows left for review |
+| `make reconcile` | Compare the ledger with every recorded statement balance, and explain any gap |
+| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `add-rule`, `opening-balance`, `checkpoint` (no arguments lists them) |
 | `make db-psql` | psql shell on the dev database |
 | `make db-down` | Stop Postgres (data is kept in a Docker volume) |
 | `make db-destroy` | Delete the database volume, including everything imported (asks first) |
@@ -185,4 +272,7 @@ merged; add a new one.
 | Badge says **API unreachable** | The backend isn't running or crashed. Check the `make dev` output. |
 | Badge says **database unreachable** | Postgres is down: `make db-up`. |
 | Tests fail with `TEST_DATABASE_URL is not set` | Run them with `make test`, not bare `cabal test`. |
+| `make post` leaves rows "for review" | By design: it won't guess which rows go together. Settle each with `scripts/reckon.sh post-row ROW_ID ACCOUNT` (see "From import to a reconciled ledger"). |
+| `opening-balance` says it must be before your first transaction | Use a statement balance from a date before the earliest imported row, or the first transaction would be counted twice. |
+| `No imported bank account ends in 1234` | Import an export for that account first, and use its last 4 digits. |
 | `reckon_test` database doesn't exist | It's created the first time the volume is initialized. If your volume predates that: `make db-psql`, then `CREATE DATABASE reckon_test;` |
