@@ -2,7 +2,7 @@
 # is a thin wrapper so `make help` doubles as the list of things you can do.
 
 .DEFAULT_GOAL := help
-.PHONY: help dev test check codegen import migrate migration db-up db-down db-psql db-destroy hooks frontend-check
+.PHONY: help dev test check codegen import post reconcile migrate migration db-up db-down db-psql db-destroy hooks frontend-check
 
 help: ## List available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-15s %s\n", $$1, $$2}'
@@ -22,6 +22,12 @@ codegen: ## Regenerate frontend/src/api/generated.ts from the Haskell API types
 import: ## Import an RBC CSV export: make import file=private/export.csv
 	@test -n "$(file)" || (echo "usage: make import file=private/export.csv" && exit 1)
 	@scripts/import.sh "$(file)"
+
+post: ## Post imported bank rows to the journal (categorize, pair transfers)
+	@scripts/reckon.sh post
+
+reconcile: ## Compare the ledger with every recorded statement balance
+	@scripts/reckon.sh reconcile
 
 migrate: ## Apply pending migrations to the dev and test databases
 	@scripts/migrate.sh

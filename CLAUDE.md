@@ -92,6 +92,9 @@ make check      # everything CI runs, run before pushing
 make codegen    # after changing backend/src/Reckon/Api/Types.hs
 make migration name=...   # new SQL migration; then `make migrate`
 make import file=private/export.csv   # import a real RBC CSV
+make post       # post imported rows to the journal
+make reconcile  # compare the ledger with every recorded statement balance
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, add-rule, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -140,3 +143,18 @@ docs/        see the table above
   `IncomingRow`) can't use record-update syntax. Build with the constructor.
 - `OverloadedRecordDot` needs the record's fields in scope: import
   `AppEnv (..)`, not just `AppEnv`, to use `env.databasePool`.
+- `postPendingRows` posts **every** unposted row in the database, and rules
+  are global. Posting tests use a `Scenario` (PostingSpec): unique account
+  numbers, a unique year (so pairing windows never overlap another test's
+  rows) and a unique description tag for rules. Assert only on the
+  scenario's own rows (DECISIONS D047).
+- Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
+  and IO in their callers. Pure planners are generic in their id and
+  account types so tests can use `Int` and `Text`.
+- A row is "posted" when it has a `journal_entry_evidence` link to an entry
+  that isn't reversed. There's no status column; don't add one. Correct a
+  posting by reversing it, dated like the original, then posting again.
+- Statement balances and opening balances are entered in the **natural**
+  sign (money in chequing, money owed on a card). Convert with
+  `naturalBalance` at the edges; the ledger stores raw debits (+) and
+  credits (−).

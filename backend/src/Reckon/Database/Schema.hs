@@ -88,6 +88,33 @@ RawBankRow sql=raw_bank_rows
   UniqueRawBankRow bankAccountId transactionDate fingerprint occurrence
   deriving Show Eq
 
+JournalEntryEvidence sql=journal_entry_evidence
+  entryId JournalEntryId
+  rawBankRowId RawBankRowId
+  Primary entryId rawBankRowId
+  deriving Show Eq
+
+CategorizationRule sql=categorization_rules
+  descriptionContains Text
+  ledgerAccountId LedgerAccountId
+  priority Int
+  UniqueCategorizationRule descriptionContains
+  deriving Show Eq
+
+StatementCheckpoint sql=statement_checkpoints
+  bankAccountId BankAccountId
+  asOfDate Day
+  statementBalanceCents Cents
+  UniqueStatementCheckpoint bankAccountId asOfDate
+  deriving Show Eq
+
+OpeningBalance sql=opening_balances
+  entryId JournalEntryId
+  bankAccountId BankAccountId
+  asOfDate Day
+  Primary entryId
+  deriving Show Eq
+
 ImportReviewItem sql=import_review_items
   batchId ImportBatchId
   bankAccountId BankAccountId

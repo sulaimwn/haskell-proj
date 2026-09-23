@@ -47,8 +47,12 @@ backend/
     Import/RbcCsv.hs      pure: RBC CSV bytes -> [RbcRow] or line-numbered errors
     Import/Dedupe.hs      pure: fingerprints, occurrences, planImport (what's new, what to flag)
     Import.hs             DB: importRbcCsv (hash check, register account, lock, plan, insert)
+    Posting/Classify.hs   pure: what each bank row is (rule, transfer leg, cancelled pair, card payment, uncategorized)
+    Posting.hs            DB: postPendingRows (plan, reverse guesses, one entry per row), post-row, rules
+    Reconcile/Explain.hs  pure: why a ledger balance and a statement balance differ
+    Reconcile.hs          DB: opening balances, statement checkpoints, reconciliation reports
   app/Main.hs             reckon-server executable
-  cli/Main.hs             reckon-cli executable (`make import file=...`)
+  cli/Main.hs             reckon-cli executable: import, post, rules, opening balance, checkpoints, reconcile
   codegen/Main.hs         reckon-codegen executable (writes generated.ts)
   test/                   hspec test suite
 frontend/
@@ -61,7 +65,7 @@ db/
   init/                   runs once when the Postgres volume is created (creates reckon_test)
 fixtures/                 FAKE data for tests and the demo (rbc/: fake RBC exports)
 private/                  REAL data. Gitignored, never committed.
-scripts/                  the bash behind every `make` target
+scripts/                  the bash behind every `make` target (reckon.sh runs any reckon-cli command)
 docs/                     you are here
 ```
 
@@ -178,7 +182,114 @@ within a day. Worked example (the fixtures):
 | `import_review_items` | `possible_duplicate` / `missing_from_newer_export`, pointing at the rows concerned |
 
 All five are append-only apart from `bank_accounts` (DECISIONS D031).
-Nothing here creates journal entries yet. That's Phase 3.
+Importing never creates journal entries. Posting (below) does.
+
+## Posting and reconciliation (Phase 3)
+
+Migration: `db/migrations/20260924090000_create_posting_and_reconciliation.sql`.
+
+The bank rows are the **evidence**. Posting turns each one into a journal
+entry, and reconciliation proves the result matches the bank's statements.
+
+```
+make import file=...     → raw_bank_rows (evidence, never modified)
+make post
+  └─ reckon-cli post ── one transaction ──────────────────────────────────────────────┐
+       1. create the well-known accounts on first use (asset:clearing, ...)          │
+       2. load unposted rows (no entry in effect), plus rows posted on a guess       │
+          that are recent enough to pair with them                                   │
+       3. planPosting (pure): cancelled pairs → transfer pairs → rules →             │
+          untracked-card payments → uncategorized; ambiguous rows → review           │
+       4. for each guess that now pairs: reverse its old entry, dated the same       │
+       5. for each posting: one journal entry + one journal_entry_evidence row       │
+     COMMIT ─────────────────────────────────────────────────────────────────────────┘
+scripts/reckon.sh opening-balance 1234 2026-01-31 1000.00   once per account
+scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43        per statement; prints the report
+make reconcile                                              re-checks every checkpoint
+```
+
+**One row, one entry** (DECISIONS D039). A row's entry has two lines: the
+row's amount on its bank's ledger account (`asset:rbc-chequing-1234`), and
+the negated amount on a **counter account** chosen by the planner:
+
+| What the row is | Counter account | How it's recognized |
+|---|---|---|
+| Half of a cancelled or refunded pair | `asset:clearing` | Same account, opposite amounts, within 45 days, one says CANCEL/REVERS/RETURN/DECLIN/REFUND. Checked first. |
+| One leg of a transfer between my accounts | `asset:clearing` | Different accounts, opposite amounts, within 5 days |
+| Matched by a categorization rule | the rule's account | First rule (by priority) whose text appears in the descriptions |
+| Payment to a card reckon doesn't track | `liability:untracked-cards` | Money leaving a non-card account, "PAYMENT"/"PMT" plus a card name |
+| Anything else | `expense:uncategorized` / `income:uncategorized` | By sign |
+| Zero amount, or a pair that isn't unambiguous | *not posted*, left for review | Listed by `make post` with the row id |
+
+**The clearing account** (D040). A transfer's two legs are separate entries
+on their own dates, each against `asset:clearing`. So each bank account
+matches its own statement on every date, the transfer never counts as
+spending, and clearing's balance is the money in transit: zero once both
+legs have landed.
+
+**Pairing is all-or-nothing** (D041). Two rows pair only if each is the
+other's *only* candidate. If a −$200 transfer has two +$200 candidates, all
+three rows wait for a person (`scripts/reckon.sh post-row ROW_ID ACCOUNT`,
+D046).
+
+**Late pairing** (D042). If the chequing export arrives first, its payment
+to the Visa is posted as a guess (untracked card or uncategorized). When the
+Visa export arrives, the new row pairs with it: the guessed entry is
+**reversed** (dated like the original, so no balance changes on any date)
+and the row is re-posted against clearing.
+
+**The reconciliation identity.** Because of the above, for every bank
+account and every date:
+
+```
+ledger balance = opening balance + sum of its posted rows up to that date
+```
+
+So when the ledger disagrees with a statement, the cause is always in the
+evidence: a row not posted yet, a missing opening balance, a duplicate
+import, or days no export covered. `Reckon.Reconcile.Explain` checks for
+each of these and reports which one closes the gap (D043).
+
+Worked example (`fixtures/rbc/february-two-accounts.csv`, with rules
+`EMPLOYER → income:job` and `HYDRO → expense:utilities`):
+
+| Row | Account | Amount | Posted against |
+|---|---|---|---|
+| Feb 2 payroll | chequing | +1500.00 | `income:job` (rule) |
+| Feb 3 payment to RBC VISA | chequing | −500.00 | `asset:clearing` (transfer with Feb 5) |
+| Feb 4 e-Transfer sent | chequing | −30.00 | `asset:clearing` (cancelled pair with Feb 6) |
+| Feb 5 PAYMENT - THANK YOU | Visa | +500.00 | `asset:clearing` (transfer with Feb 3) |
+| Feb 6 e-Transfer cancelled | chequing | +30.00 | `asset:clearing` (cancelled pair with Feb 4) |
+| Feb 8 coffee | Visa | −4.50 | `expense:uncategorized` |
+| Feb 9 payment to AMEX | chequing | −120.00 | `liability:untracked-cards` |
+| Feb 12 hydro | chequing | −85.40 | `expense:utilities` (rule) |
+| Feb 14 transfer | chequing | −200.00 | review: two candidates |
+| Feb 15 PAYMENT - THANK YOU | Visa | +200.00 | review |
+| Feb 16 RETURN - BOOKSHOP | Visa | +200.00 | review |
+| Feb 20 grocery | chequing | −42.17 | `expense:uncategorized` |
+
+With a $1000.00 opening balance on Jan 31 and a Feb 28 statement of
+$1552.43, the ledger shows $1752.43, and the report says the unposted
+−$200.00 closes the gap. After `post-row` settles the three review rows, it
+reports RECONCILED. `PostingSpec` runs exactly this.
+
+**Tables:**
+
+| Table | Holds | Mutable? |
+|---|---|---|
+| `journal_entry_evidence` | which raw bank row each posted entry came from (PK: entry, row) | append-only |
+| `categorization_rules` | "description contains TEXT → account", with priority (TEXT stored upper-case, UNIQUE) | editable (configuration) |
+| `statement_checkpoints` | a statement's closing balance for an account and date (UNIQUE per account and date), as the statement shows it | append-only |
+| `opening_balances` | which journal entry is an account's opening balance, and its date | append-only; replaced by reversing the entry |
+
+A row is **posted** when it has an evidence link to an entry that hasn't
+been reversed. There's no status column to keep in step: "unposted" is a
+query.
+
+Signs: the ledger stores raw debits (+) and credits (−). Statements show the
+**natural** balance (money in chequing, money owed on a card).
+`naturalBalance` converts between them at the edges: opening balances and
+checkpoints are entered natural, and reports print natural.
 
 ## Invariants
 
@@ -200,7 +311,12 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Imported evidence is never modified | append-only triggers + raw-SQL test | Phase 2 |
 | Only the last 4 digits of an account number are stored | `Last4` smart constructor, parser discards the rest, `CHECK (last4 ~ '^[0-9]{4}$')`, test scanning every stored column | Phase 2 |
 | Unclear dedupe cases go to a person, never guessed | `import_review_items` (possible duplicate, missing from newer export) | Phase 2 |
-| Ledger balance = statement balance at each checkpoint | *Phase 3:* reconciliation report | planned |
+| Every posted entry comes from exactly one bank row, and a row has at most one entry in effect | `postRow` writes the entry and its `journal_entry_evidence` link together; posting only loads rows with no entry in effect; re-posting reverses first; idempotence test | Phase 3 |
+| A bank account's ledger balance on any date = opening balance + its posted rows up to that date | one-row-one-entry (D039); re-posting reversals dated like the original (D042); DB test on every date of the fixture + hedgehog property over random exports; mutation check (reversal dated a day late fails) | Phase 3 |
+| Transfers and cancellations never count as income or spending, and net to zero | both legs through `asset:clearing` (D040); `ClassifySpec` property: clearing sums to zero; DB property | Phase 3 |
+| Rows are only paired when the pairing is unambiguous; otherwise a person decides | mutual-only-candidate rule in `pairUniquely` (D041); property: pairs are mutual, each new row handled exactly once; mutation check (removing the mutual check fails 5 tests) | Phase 3 |
+| Evidence links, checkpoints and opening balances are never modified | append-only triggers + raw-SQL tests | Phase 3 |
+| Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI
 

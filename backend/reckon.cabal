@@ -40,6 +40,10 @@ library
     Reckon.Ledger.AccountType
     Reckon.Ledger.Entry
     Reckon.Money
+    Reckon.Posting
+    Reckon.Posting.Classify
+    Reckon.Reconcile
+    Reckon.Reconcile.Explain
     Reckon.Server
 
   other-modules:   Paths_reckon
@@ -87,6 +91,7 @@ executable reckon-cli
     , persistent
     , reckon
     , text
+    , time
 
 -- Writes the TypeScript API types for the frontend. `make codegen` runs this.
 executable reckon-codegen
@@ -110,6 +115,9 @@ test-suite reckon-test
     Reckon.ImportSpec
     Reckon.Ledger.EntrySpec
     Reckon.LedgerSpec
+    Reckon.Posting.ClassifySpec
+    Reckon.PostingSpec
+    Reckon.Reconcile.ExplainSpec
     Reckon.ServerSpec
     Reckon.TestSupport
 

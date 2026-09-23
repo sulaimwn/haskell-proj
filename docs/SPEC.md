@@ -77,6 +77,10 @@ Phase 2 added `bank_accounts`, `import_batches`, `import_batch_coverage`, `raw_b
 and `import_review_items`. `raw_bank_rows` uses `occurrence` instead of
 `position_within_day`, and omits status and screenshot-only columns for now
 (DECISIONS D029, D035).
+Phase 3 added `journal_entry_evidence` (the `raw_row_links` below),
+`categorization_rules`, `statement_checkpoints` and `opening_balances`.
+Whether a row is posted is a query over the evidence links, not a status
+column (see [ARCHITECTURE.md](ARCHITECTURE.md#posting-and-reconciliation-phase-3)).
 
 | Table | Purpose |
 |---|---|
@@ -135,6 +139,18 @@ Fake RBC-format CSV fixtures cover these edge cases.
 
 ### Phase 3: Turning evidence into entries
 
+**As built** (the bullets below are the original plan; the refinements are
+in DECISIONS D038–D048):
+- Transfers are **two entries through `asset:clearing`**, one per leg on its
+  own date, not one entry, so each account matches its statement on every
+  date (D040).
+- Pending vs posted and pending debit holds **moved to Phase 5** (D045):
+  CSV exports only contain posted transactions.
+- Payments to untracked cards go to `liability:untracked-cards` (D038, a
+  default the owner may override).
+- Reading the counterparty's name out of an e-Transfer description **moved
+  to Phase 4**, where it's first needed, to match repayments (D048).
+
 - Simple rows become entries, categorized by rules where possible, otherwise
   into an uncategorized expense account.
 - Transfer pairing: a transfer between two of my accounts appears in both
@@ -181,6 +197,10 @@ appears in an import, it can be matched to their open receivable. Reported
 spending reflects only my share.
 
 ### Phase 5: Screenshot ingestion with Claude
+
+Also includes, moved from Phase 3 (D045): pending vs posted (a tip changes
+the amount) and pending debit holds, as provisional entries replaced by
+reversal when the posted row arrives.
 
 1. Upload screenshots of the RBC app's transaction list from the frontend.
    Exact duplicate images are rejected by hash.

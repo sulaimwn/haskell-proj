@@ -188,6 +188,34 @@ ALTER TABLE public.bank_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
+-- Name: categorization_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.categorization_rules (
+    id bigint NOT NULL,
+    description_contains text NOT NULL,
+    ledger_account_id bigint NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT categorization_rules_description_contains_check CHECK (((description_contains <> ''::text) AND (description_contains = upper(description_contains))))
+);
+
+
+--
+-- Name: categorization_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.categorization_rules ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.categorization_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: import_batch_coverage; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -296,6 +324,16 @@ ALTER TABLE public.journal_entries ALTER COLUMN id ADD GENERATED ALWAYS AS IDENT
 
 
 --
+-- Name: journal_entry_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.journal_entry_evidence (
+    entry_id bigint NOT NULL,
+    raw_bank_row_id bigint NOT NULL
+);
+
+
+--
 -- Name: journal_lines; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -353,6 +391,17 @@ ALTER TABLE public.ledger_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENT
 
 
 --
+-- Name: opening_balances; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.opening_balances (
+    entry_id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    as_of_date date NOT NULL
+);
+
+
+--
 -- Name: raw_bank_rows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -395,6 +444,33 @@ CREATE TABLE public.schema_migrations (
 
 
 --
+-- Name: statement_checkpoints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.statement_checkpoints (
+    id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    as_of_date date NOT NULL,
+    statement_balance_cents bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: statement_checkpoints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.statement_checkpoints ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.statement_checkpoints_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: bank_accounts bank_accounts_institution_account_kind_last4_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -416,6 +492,22 @@ ALTER TABLE ONLY public.bank_accounts
 
 ALTER TABLE ONLY public.bank_accounts
     ADD CONSTRAINT bank_accounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: categorization_rules categorization_rules_description_contains_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categorization_rules
+    ADD CONSTRAINT categorization_rules_description_contains_key UNIQUE (description_contains);
+
+
+--
+-- Name: categorization_rules categorization_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categorization_rules
+    ADD CONSTRAINT categorization_rules_pkey PRIMARY KEY (id);
 
 
 --
@@ -467,6 +559,14 @@ ALTER TABLE ONLY public.journal_entries
 
 
 --
+-- Name: journal_entry_evidence journal_entry_evidence_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_pkey PRIMARY KEY (entry_id, raw_bank_row_id);
+
+
+--
 -- Name: journal_lines journal_lines_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -488,6 +588,14 @@ ALTER TABLE ONLY public.ledger_accounts
 
 ALTER TABLE ONLY public.ledger_accounts
     ADD CONSTRAINT ledger_accounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: opening_balances opening_balances_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_pkey PRIMARY KEY (entry_id);
 
 
 --
@@ -515,10 +623,33 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
+-- Name: statement_checkpoints statement_checkpoints_bank_account_id_as_of_date_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_bank_account_id_as_of_date_key UNIQUE (bank_account_id, as_of_date);
+
+
+--
+-- Name: statement_checkpoints statement_checkpoints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: journal_entries_occurred_on_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX journal_entries_occurred_on_idx ON public.journal_entries USING btree (occurred_on);
+
+
+--
+-- Name: journal_entry_evidence_raw_bank_row_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX journal_entry_evidence_raw_bank_row_id_idx ON public.journal_entry_evidence USING btree (raw_bank_row_id);
 
 
 --
@@ -533,6 +664,13 @@ CREATE INDEX journal_lines_entry_id_idx ON public.journal_lines USING btree (ent
 --
 
 CREATE INDEX journal_lines_ledger_account_id_idx ON public.journal_lines USING btree (ledger_account_id);
+
+
+--
+-- Name: opening_balances_bank_account_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX opening_balances_bank_account_id_idx ON public.opening_balances USING btree (bank_account_id);
 
 
 --
@@ -578,6 +716,13 @@ CREATE TRIGGER journal_entries_cannot_be_truncated BEFORE TRUNCATE ON public.jou
 
 
 --
+-- Name: journal_entry_evidence journal_entry_evidence_is_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER journal_entry_evidence_is_append_only BEFORE DELETE OR UPDATE ON public.journal_entry_evidence FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
 -- Name: journal_entries journal_entry_is_balanced; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -613,6 +758,13 @@ CREATE TRIGGER journal_lines_only_with_their_entry BEFORE INSERT ON public.journ
 
 
 --
+-- Name: opening_balances opening_balances_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER opening_balances_are_append_only BEFORE DELETE OR UPDATE ON public.opening_balances FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_are_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -627,11 +779,26 @@ CREATE TRIGGER raw_bank_rows_cannot_be_truncated BEFORE TRUNCATE ON public.raw_b
 
 
 --
+-- Name: statement_checkpoints statement_checkpoints_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER statement_checkpoints_are_append_only BEFORE DELETE OR UPDATE ON public.statement_checkpoints FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
 -- Name: bank_accounts bank_accounts_ledger_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bank_accounts
     ADD CONSTRAINT bank_accounts_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
+
+
+--
+-- Name: categorization_rules categorization_rules_ledger_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categorization_rules
+    ADD CONSTRAINT categorization_rules_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
 
 
 --
@@ -691,6 +858,22 @@ ALTER TABLE ONLY public.journal_entries
 
 
 --
+-- Name: journal_entry_evidence journal_entry_evidence_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
+
+
+--
+-- Name: journal_entry_evidence journal_entry_evidence_raw_bank_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_raw_bank_row_id_fkey FOREIGN KEY (raw_bank_row_id) REFERENCES public.raw_bank_rows(id);
+
+
+--
 -- Name: journal_lines journal_lines_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -704,6 +887,22 @@ ALTER TABLE ONLY public.journal_lines
 
 ALTER TABLE ONLY public.journal_lines
     ADD CONSTRAINT journal_lines_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
+
+
+--
+-- Name: opening_balances opening_balances_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
+-- Name: opening_balances opening_balances_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
 
 
 --
@@ -723,6 +922,14 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 
 --
+-- Name: statement_checkpoints statement_checkpoints_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -735,4 +942,5 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260922210000'),
-    ('20260923120000');
+    ('20260923120000'),
+    ('20260924090000');
