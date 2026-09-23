@@ -70,6 +70,10 @@ only in application code.
 
 ### Suggested tables (to be refined, with changes explained)
 
+As built so far, see [ARCHITECTURE.md](ARCHITECTURE.md#data-model-phase-1).
+One refinement: `journal_entries` has no `status` column, because the journal is
+append-only. Confirmation of provisional entries will be its own table (DECISIONS D025).
+
 | Table | Purpose |
 |---|---|
 | `bank_accounts` | institution, nickname, account_kind (chequing/savings/credit_card), last4, currency, linked ledger account |

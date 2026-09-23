@@ -20,6 +20,7 @@ This grows with every phase. Every new module gets a section.
 - [`Reckon.Api.Types` and `JsonOptions`: one definition, two languages](#reckonapitypes-and-jsonoptions-one-definition-two-languages)
 - [`Reckon.Server`: handlers](#reckonserver-handlers)
 - [`codegen/Main.hs` and `Reckon.Api.TypeScript`](#codegenmainhs-and-reckonapitypescript)
+- [The ledger (Phase 1)](#the-ledger-phase-1)
 - [Tests](#tests)
 - [Frontend](#frontend)
 - [Glossary](#glossary)
@@ -306,6 +307,140 @@ on the generated TypeScript (see `TypesSpec`).
 
 ---
 
+## The ledger (Phase 1)
+
+Read these in order: `Money` → `Ledger.AccountType` → `Database.Schema` →
+`Ledger.Entry` → `Ledger`. Then read the SQL in
+`db/migrations/20260922210000_create_ledger.sql`, the second half of the story.
+
+### `Reckon.Money`: `Cents`
+
+```haskell
+newtype Cents = Cents Int64
+  deriving newtype (Eq, Ord, PersistField, PersistFieldSql)
+instance Semigroup Cents where Cents a <> Cents b = Cents (a + b)
+instance Monoid Cents where mempty = Cents 0
+```
+
+- A **newtype** is a wrapper with zero runtime cost. At runtime it *is* an
+  `Int64`, but the type checker treats it as a different type, so you can't
+  pass a row count where money is expected.
+- `deriving newtype` reuses the wrapped type's instances: comparison, and
+  persistent's conversion to and from a `BIGINT` column.
+- **No `Num` instance, on purpose** (DECISIONS D027). Addition is `<>`, zero is
+  `mempty`, and `sumCents` is `mconcat`. Summing money uses the same
+  `Monoid` vocabulary as concatenating lists.
+
+**Q: Why not `Double`?**
+A: Binary floating point can't represent 0.10 exactly, so rounding errors
+accumulate, and a ledger has to reconcile to the cent. Integer cents are
+exact. Formatting as dollars happens only at display time.
+
+### `Reckon.Ledger.AccountType`
+
+A plain sum type with five constructors, a hand-written `PersistField`
+instance that stores it as text (DECISIONS D028), and `naturalBalance`,
+which turns the raw signed balance into what a person expects to see: a
+credit card you owe $120 on is stored as −12000 and shown as 12000.
+
+`deriving stock (Enum, Bounded)` gives `[minBound .. maxBound]`, the list of
+all five, which `accountTypeFromText` and the round-trip test use.
+
+### `Reckon.Database.Schema`: persistent entities
+
+```haskell
+share [mkPersist sqlSettings] [persistLowerCase|
+JournalLine sql=journal_lines
+  entryId JournalEntryId
+  ledgerAccountId LedgerAccountId
+  amountCents Cents
+|]
+```
+
+- A **quasi-quote** (`[persistLowerCase| ... |]`) embeds a small language
+  inside Haskell. Template Haskell (`mkPersist`) turns it into:
+  - a record `JournalLine { journalLineEntryId, journalLineLedgerAccountId, journalLineAmountCents }`
+  - a key type per table (`JournalEntryId`, `LedgerAccountId`). They're
+    **different types**, so passing an entry id where an account id belongs
+    is a compile error. That's the spec's "newtype per ID type", for free.
+  - field constructors (`JournalLineEntryId`) used in queries.
+- This module switches *off* `DuplicateRecordFields`, because persistent
+  generates its own prefixed field names.
+- It only *describes* tables. The SQL migration creates them (D006, D028).
+
+### `Reckon.Ledger.Entry`: smart constructors
+
+```haskell
+newtype BalancedLines = BalancedLines [EntryLine]   -- constructor NOT exported
+mkBalancedLines :: [EntryLine] -> Either EntryError BalancedLines
+reverseLines   :: BalancedLines -> BalancedLines
+```
+
+This is the most important idea in Phase 1. The module exports the *type*
+`BalancedLines` but not its *constructor*. The only way anyone outside can
+get a `BalancedLines` is `mkBalancedLines`, which checks: at least two
+lines, no zeros, sum zero. So a function that takes `BalancedLines`
+(`postEntry`) never needs to re-check. The type is the proof. This pattern is
+often summed up as **"parse, don't validate"**.
+
+- `reverseLines` returns `BalancedLines`, not `Either`: negating every line of
+  a balanced set is always balanced, so it can't fail, and the type says so.
+- `NewJournalEntry` goes further: even its *fields* aren't exported, because
+  record-update syntax (`entry { description = "" }`) would otherwise let
+  code build an invalid value without going through `mkNewJournalEntry`.
+- Errors are a sum type (`EntryError`), not strings, so tests and callers
+  can match on exactly which rule failed.
+
+**Q: If the database checks balance anyway, why check in Haskell too?**
+A: They do different jobs. The type catches mistakes at compile time and
+gives a precise error before touching the database. The trigger is the
+guarantee that holds for *every* writer, including psql, a future script, or
+a bug. Defense in depth.
+
+### `Reckon.Ledger`: database operations
+
+- Functions run in `SqlPersistT m`: "a database action inside a transaction".
+  The *caller* decides where the transaction begins and ends (`runSqlPool`),
+  so an entry and its lines are always saved together or not at all.
+- `postReversal` returns `Either ReversalError JournalEntryId`. Reversing a
+  missing entry, or one already reversed, is an expected outcome that gets
+  its own error, not an exception.
+- `accountBalanceAsOf` is an **esqueleto** query, type-safe SQL:
+
+  ```haskell
+  (line :& entry) <- from $ table @JournalLine `innerJoin` table @JournalEntry `on` ...
+  where_ (line ^. JournalLineLedgerAccountId ==. val accountId &&. entry ^. JournalEntryOccurredOn <=. val asOf)
+  pure (sum_ (line ^. JournalLineAmountCents))
+  ```
+
+  `^.` reads a column. `val` turns a Haskell value into a SQL parameter (no
+  string building, so no SQL injection). Comparing a column to a value of the
+  wrong type is a compile error. `SUM` over `BIGINT` comes back from Postgres
+  as `NUMERIC`, hence the `Rational` and the whole-number check.
+
+### The SQL side (the migration)
+
+| Rule | Mechanism |
+|---|---|
+| ≥ 2 lines, sum = 0; reversal cancels exactly | `check_journal_entry()`, run by `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`, i.e. at COMMIT |
+| Append-only | `BEFORE UPDATE OR DELETE` / `BEFORE TRUNCATE` triggers that `RAISE EXCEPTION` |
+| No lines added to old entries | `created_in_transaction DEFAULT txid_current()` + `BEFORE INSERT` trigger on lines |
+| Reversed at most once | `UNIQUE (reverses_entry_id)` |
+
+**Q: What's a deferred constraint trigger, and why is it needed here?**
+A: A normal trigger runs right after each INSERT. But while you insert an
+entry's lines one by one, the entry is *temporarily* unbalanced. A deferred
+trigger waits until COMMIT, when the whole entry exists, and if it fails, the
+entire transaction rolls back.
+
+**Q: How would someone sneak a change past an append-only journal, and how is
+that blocked?**
+A: By *inserting* a balanced pair of new lines into an old entry. No UPDATE
+is needed, and the sum stays zero. The `created_in_transaction` check rejects
+lines for any entry not created in the current transaction.
+
+---
+
 ## Tests
 
 `backend/test/Main.hs` runs every spec with **hspec**, a BDD-style framework
@@ -333,8 +468,39 @@ pool connects lazily, so the environment builds fine, and the first query
 fails like it would in production. Because the environment is a plain value,
 the fault can be injected without mocks.
 
-From Phase 1, **hedgehog** property tests generate random sequences of ledger
-operations and check that invariants hold for all of them.
+Phase 1 adds:
+
+| Spec | What it proves |
+|---|---|
+| `Ledger.EntrySpec` | Pure rules, mostly as **hedgehog properties**: any generated zero-sum set is accepted; skewing it by *x* is rejected with `LinesDoNotBalance x`; reversing negates every line and still balances. Plus `naturalBalance` and account-type round-trips. |
+| `LedgerSpec` | Against the real test database: balances as of a date, reversals restoring balances, double and missing reversals rejected. **Raw-SQL tests** that bypass Haskell to show the database rejects unbalanced entries, single-line and empty entries, UPDATE/DELETE, lines added to an old entry, and a reversal that doesn't cancel. And the **model-based property** below. |
+
+**Property-based testing** (hedgehog): instead of hand-picking examples, you
+write a *generator* of random inputs and a *property* that must hold for all
+of them. Hedgehog runs it 100 times, and when it finds a failure it
+*shrinks* the input to the smallest case that still fails.
+
+The main property, `ledgerMatchesModel`:
+
+1. Generate a random scenario: 1 to 25 operations, each either "post an entry of 2
+   to 6 random lines over 4 accounts" or "reverse some earlier entry", on random
+   dates.
+2. Run it against the **real database**, one transaction per operation, just
+   like production.
+3. Keep a trivially correct **model** alongside: a list of (date, account,
+   amount).
+4. Check that each account's balance (at a random date and at the far future)
+   equals the model's, that all balances sum to zero, and that every stored
+   entry has at least two lines summing to zero.
+
+This is **model-based testing**: the real system (SQL, triggers, esqueleto)
+is compared against a model simple enough to be obviously right. To confirm
+the test has teeth, a planted bug (`<` instead of `<=` in the as-of filter)
+was introduced, the property failed, and the bug was reverted.
+
+Tests never delete anything (the journal forbids it). Each test makes its
+own accounts with a unique suffix, and `make test` recreates the test
+database on each run (DECISIONS D026).
 
 ---
 
@@ -380,3 +546,6 @@ exhaustiveness checking across the language boundary.
 | **WAI** | Web Application Interface: `Application = Request -> (Response -> IO) -> IO`. The common interface between Haskell web servers and frameworks. |
 | **Warp** | The HTTP server that runs a WAI `Application`. |
 | **persistent** | Database library: connection pools, typed entities, and queries (with **esqueleto** for SQL joins, from Phase 1). |
+| **Smart constructor** | A function that validates input before building a value, where the raw constructor is hidden, so every value of the type is valid. |
+| **Property-based test** | A test that checks a rule over many randomly generated inputs, shrinking any failure to a minimal example. |
+| **Double-entry** | Every transaction is recorded as lines that sum to zero: whatever one account gains, others lose. |

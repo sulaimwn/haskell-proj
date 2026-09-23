@@ -188,3 +188,97 @@ that has to handle generics correctly, for a purely cosmetic gain.
 **Why:** The Makefile targets are bash, and bash fails silently in creative
 ways (unquoted expansions, `cd` failures). shellcheck runs in CI and in
 `make check`. It caught three real bugs in the first draft of the scripts.
+
+### D020: Signed amounts, debits positive and credits negative (Phase 1, accepted with the owner)
+
+**Decision:** `journal_lines.amount_cents` is one signed `BIGINT`. An entry
+balances when its lines sum to zero. `naturalBalance` flips the sign for
+credit-normal accounts (liability, income, equity) at display time only.
+**Why:** "Balanced" is then a single `SUM(...) = 0`, and an account's balance
+is a single `SUM`. It's the representation most ledger systems use internally.
+**Alternatives:** Separate non-negative debit and credit columns. That's more
+familiar on paper, but every sum needs a `CASE`, and a line with both columns
+set (or neither) becomes a new invalid state to guard against.
+
+### D021: The journal is append-only, enforced by triggers (Phase 1, accepted with the owner)
+
+**Decision:** `BEFORE UPDATE OR DELETE` and `BEFORE TRUNCATE` triggers on
+`journal_entries` and `journal_lines` raise an error. Mistakes are corrected
+with reversing entries (`postReversal`).
+**Why:** A financial record you can quietly edit can't be audited. Triggers
+apply to every connection, including psql and a superuser. Permissions alone
+would be silently bypassed by the superuser the app uses in development.
+**Consequence:** Tests can't clean up. See D026.
+
+### D022: Entries and their lines are posted in one Haskell transaction; balance checked by a deferred trigger (Phase 1, accepted with the owner)
+
+**Decision:** `postEntry` inserts the entry and its lines inside the caller's
+transaction. `DEFERRABLE INITIALLY DEFERRED` constraint triggers run
+`check_journal_entry` at COMMIT: at least two lines, a sum of zero, and for a
+reversal, an exact cancellation of the original. In Haskell, the entry's lines
+are a `BalancedLines` value, which only the validating smart constructor
+`mkBalancedLines` can build.
+**Why deferred:** An entry is necessarily unbalanced partway through inserting
+its lines. Only the finished transaction can be judged.
+**Why both layers:** The Haskell type catches mistakes at compile time and
+gives good error messages. The trigger is the guarantee that holds even when
+the Haskell layer is bypassed (tested with raw SQL).
+**Alternatives:** A `post_entry(...)` stored procedure. That keeps logic in
+SQL, but it duplicates validation and is harder to test and to evolve.
+
+### D023: Single currency (CAD), enforced with a CHECK (Phase 1, accepted)
+
+**Decision:** `ledger_accounts.currency` exists but is constrained to `'CAD'`.
+**Why:** The owner's only account is CAD. Supporting several currencies
+properly means balancing per currency and recording FX gains and losses. Until
+then, the constraint stops a USD account from silently breaking the
+"sums to zero" rule. Lifting it is a new migration plus a per-currency check.
+
+### D024: Lines can only be added in the transaction that created their entry (Phase 1, accepted)
+
+**Context:** The balance trigger checks an entry when lines are inserted. Adding
+a *balanced* pair of lines to an entry committed last week would pass it and
+silently rewrite history, without any UPDATE.
+**Decision:** `journal_entries.created_in_transaction` defaults to
+`txid_current()`, and a `BEFORE INSERT` trigger on `journal_lines` rejects
+lines whose entry was created in a different transaction.
+
+### D025: Provisional vs confirmed will be a separate table, not a status column (Phase 1, accepted)
+
+**Context:** The spec's `journal_entries.status` (provisional → confirmed)
+would require an UPDATE, which D021 forbids.
+**Decision:** No status column. Phase 5 will add an append-only
+`entry_confirmations` table (entry id, evidence, time), and an entry is
+confirmed if and only if a confirmation row exists. The history of *when* and
+*why* it was confirmed comes for free.
+
+### D026: Tests never delete; `make test` recreates the test database (Phase 1, accepted)
+
+**Decision:** Every database test creates its own accounts with a unique
+suffix (`uniqueSuffix`, from `gen_random_uuid()`) and only reads those
+accounts. `scripts/test.sh` drops and re-migrates `reckon_test` before each
+run (dropping a whole database isn't blocked by table triggers). CI starts
+from an empty database anyway.
+**Alternatives:** Wrap each test in a rolled-back transaction. Rejected
+because the deferred balance trigger only fires at COMMIT, so the tests
+that matter most would never exercise it.
+
+### D027: `Cents` has no `Num` instance (Phase 1, accepted)
+
+**Decision:** `Cents` is a `newtype` over `Int64` with `Semigroup`/`Monoid`
+(addition and zero) and `negateCents`, but not `Num`.
+**Why:** `Num` would allow `price * price`, which means nothing for money, and
+integer literals would silently become cents (`5 :: Cents`). Every amount has
+to be written `Cents 500`, which makes the unit visible.
+
+### D028: The persistent schema is kept in step with the SQL by hand (Phase 1, accepted)
+
+**Decision:** `Reckon.Database.Schema` describes the tables for persistent and
+omits the columns the database fills in (`created_at`,
+`created_in_transaction`). Enum-like columns are `TEXT` with `CHECK`
+constraints, not Postgres enum types, and `AccountType` converts to and from
+text itself.
+**Why TEXT + CHECK:** persistent sends parameters as text, and Postgres enum
+types need explicit casts. Plain text columns are also easy to read in psql.
+**Risk:** The two definitions can drift. Every table is exercised through
+persistent by the test suite, so a mismatch fails the tests.

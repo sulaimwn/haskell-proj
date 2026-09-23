@@ -84,7 +84,7 @@ Run `make` with no arguments to see them all.
 | Command | What it does |
 |---|---|
 | `make dev` | Start everything (see above) |
-| `make test` | Backend test suite, against the migrated `reckon_test` database |
+| `make test` | Backend test suite. Recreates and migrates `reckon_test` first (the journal is append-only, so tests can't clean up) |
 | `make check` | Everything CI runs. **Run before pushing.** |
 | `make codegen` | Regenerate `frontend/src/api/generated.ts` after changing API types |
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |

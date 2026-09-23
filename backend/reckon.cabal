@@ -31,6 +31,11 @@ library
     Reckon.App
     Reckon.Config
     Reckon.Database
+    Reckon.Database.Schema
+    Reckon.Ledger
+    Reckon.Ledger.AccountType
+    Reckon.Ledger.Entry
+    Reckon.Money
     Reckon.Server
 
   other-modules:   Paths_reckon
@@ -39,12 +44,15 @@ library
     , aeson
     , aeson-typescript
     , bytestring
+    , esqueleto
     , monad-logger
     , mtl
+    , persistent
     , persistent-postgresql
     , servant
     , servant-server
     , text
+    , time
     , unliftio
     , wai
 
@@ -76,6 +84,8 @@ test-suite reckon-test
   other-modules:
     Reckon.Api.TypesSpec
     Reckon.ConfigSpec
+    Reckon.Ledger.EntrySpec
+    Reckon.LedgerSpec
     Reckon.ServerSpec
     Reckon.TestSupport
 
@@ -83,7 +93,12 @@ test-suite reckon-test
   build-depends:
     , aeson
     , bytestring
+    , containers
+    , hedgehog
     , hspec
+    , hspec-hedgehog
     , hspec-wai
+    , persistent
     , reckon
     , text
+    , time

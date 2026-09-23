@@ -22,8 +22,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | Phase | | Status |
 |---|---|---|
 | 0 | Environment and skeleton | ✅ done |
-| 1 | Ledger core: balanced, append-only journal, property tests | next |
-| 2 | RBC CSV import with idempotent, overlap-safe dedupe | |
+| 1 | Ledger core: balanced, append-only journal, property tests | ✅ done |
+| 2 | RBC CSV import with idempotent, overlap-safe dedupe | next |
 | 3 | Evidence → entries, transfer pairing, statement reconciliation | |
 | 4 | Shared expenses and receivables | |
 | 5 | Screenshot ingestion with Claude | |
