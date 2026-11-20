@@ -94,7 +94,8 @@ make migration name=...   # new SQL migration; then `make migrate`
 make import file=private/export.csv   # import a real RBC CSV
 make post       # post imported rows to the journal
 make reconcile  # compare the ledger with every recorded statement balance
-scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, add-rule, opening-balance, checkpoint)
+make owed       # what friends owe you
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, add-person, split-row, spending, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -154,7 +155,20 @@ docs/        see the table above
 - A row is "posted" when it has a `journal_entry_evidence` link to an entry
   that isn't reversed. There's no status column; don't add one. Correct a
   posting by reversing it, dated like the original, then posting again.
+- Replace a posted row's entry only through `Posting.repostRow` (reverse
+  dated like the original, then post). It refuses rows whose entry touches
+  `asset:clearing`. Anything that can refuse must validate *before* it writes.
+- `people` (name, `match_text`) is global like rules. Tests that add people
+  derive names and match texts from the scenario's tag (SharingSpec), and the
+  planner takes people as an argument so its tests need no database.
+- Shared test helpers (`Scenario`, `importCsv`, `entryLinesForRow`, ...) live in
+  `test/Reckon/ScenarioSupport.hs`. `postPendingRows` posts every unposted
+  row, so a test must only assert on its own scenario's rows.
 - Statement balances and opening balances are entered in the **natural**
   sign (money in chequing, money owed on a card). Convert with
   `naturalBalance` at the edges; the ledger stores raw debits (+) and
   credits (−).
+- `make migrate` rewrites `db/schema.sql`. A newer Postgres patch release can
+  add noise to that dump (`ALTER TABLE ... SET (pg_attver=...)` lines, a
+  changed "Dumped from database version" comment). Strip it before committing
+  so the diff shows only the real schema change.

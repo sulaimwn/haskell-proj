@@ -25,8 +25,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | 1 | Ledger core: balanced, append-only journal, property tests | ✅ done |
 | 2 | RBC CSV import with idempotent, overlap-safe dedupe | ✅ done |
 | 3 | Evidence → entries, transfer pairing, statement reconciliation | ✅ done |
-| 4 | Shared expenses and receivables | next |
-| 5 | Screenshot ingestion with Claude | |
+| 4 | Shared expenses and receivables | ✅ done |
+| 5 | Screenshot ingestion with Claude | next |
 | 6 | Frontend | |
 | 7 | Scheduled jobs and a categorization rule language | |
 | 8 | Demo dataset and write-up | |
@@ -45,6 +45,7 @@ make check  # everything CI runs
 make import file=private/rbc-export.csv   # import a real RBC CSV export
 make post                                 # turn imported rows into journal entries
 scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43   # check against a statement
+scripts/reckon.sh split-row 42 expense:food equal alex sam   # share a dinner; `owed` shows who owes what
 ```
 
 Open <http://localhost:5173>. The first build compiles all Haskell

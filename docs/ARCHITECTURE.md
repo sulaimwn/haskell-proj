@@ -51,8 +51,12 @@ backend/
     Posting.hs            DB: postPendingRows (plan, reverse guesses, one entry per row), post-row, rules
     Reconcile/Explain.hs  pure: why a ledger balance and a statement balance differ
     Reconcile.hs          DB: opening balances, statement checkpoints, reconciliation reports
+    Posting/Split.hs      pure: splitting a payment between me and friends (smart constructor, equal shares)
+    People.hs             DB: people I share costs with, their receivable accounts, who owes what
+    Sharing.hs            DB: splitRow (replace a row's entry with a split one)
+    Report.hs             DB: spending by expense account (my share only)
   app/Main.hs             reckon-server executable
-  cli/Main.hs             reckon-cli executable: import, post, rules, opening balance, checkpoints, reconcile
+  cli/Main.hs             reckon-cli executable: import, post, rules, people, splits, owed, spending, opening balance, checkpoints, reconcile
   codegen/Main.hs         reckon-codegen executable (writes generated.ts)
   test/                   hspec test suite
 frontend/
@@ -291,6 +295,55 @@ Signs: the ledger stores raw debits (+) and credits (−). Statements show the
 `naturalBalance` converts between them at the edges: opening balances and
 checkpoints are entered natural, and reports print natural.
 
+## Shared expenses (Phase 4)
+
+Migration: `db/migrations/20260925090000_create_people.sql`. One new table,
+`people` (name, `match_text`, receivable account), which is configuration and
+may be edited. Everything else is built from entries that already exist.
+
+```
+scripts/reckon.sh add-person alex "ALEX SMITH"      creates receivable:alex
+make post                                           a deposit mentioning ALEX SMITH is
+                                                    left for review: "might be a repayment"
+scripts/reckon.sh split-row 42 expense:food equal alex sam jo
+                                                    the dinner's entry is reversed and re-posted
+scripts/reckon.sh post-row 57 receivable:alex       Alex's e-Transfer settles his share
+scripts/reckon.sh owed                              who owes what
+scripts/reckon.sh spending 2026-03-01 2026-03-31    my share only
+```
+
+**A split is one entry** (D049). The $120 dinner (row #42, −$120.00 on the
+chequing account) after `split-row 42 expense:food equal alex sam jo`:
+
+| Account | amount_cents |
+|---|---|
+| `asset:rbc-chequing-1234` | −12000 |
+| `expense:food` (my share) | +3000 |
+| `receivable:alex` | +3000 |
+| `receivable:sam` | +3000 |
+| `receivable:jo` | +3000 |
+| **sum** | **0** |
+
+Still one entry, still linked to its one bank row, so the reconciliation
+identity (Phase 3) holds unchanged: the bank account's line is the row.
+Alex's later e-Transfer (+$30.00) is its own row and entry: `asset:rbc-chequing`
++3000, `receivable:alex` −3000, which brings his receivable to zero.
+
+**Replacing an entry** (D051). `split-row` and `recategorize` reverse the
+row's entry in effect (dated like the original) and post a new one. Nothing
+is edited, and nothing is written if the request is invalid. A row whose
+entry touches `asset:clearing` is refused: moving one leg of a pair alone
+would leave clearing out of balance.
+
+**Repayments** (D050, D053). The planner treats money *in* to a non-card
+account whose description contains a person's `match_text` as a possible
+repayment. It is left for review, not posted, and `make post` prints the
+`post-row` command that applies it. Two people matching are both named.
+
+**Spending** (D052) is the sum of `expense` accounts. A friend's share is in
+their receivable (an asset) and transfers are in clearing, so neither can
+count as spending.
+
 ## Invariants
 
 This section grows every phase. Each invariant lists how it is enforced.
@@ -316,6 +369,11 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Transfers and cancellations never count as income or spending, and net to zero | both legs through `asset:clearing` (D040); `ClassifySpec` property: clearing sums to zero; DB property | Phase 3 |
 | Rows are only paired when the pairing is unambiguous; otherwise a person decides | mutual-only-candidate rule in `pairUniquely` (D041); property: pairs are mutual, each new row handled exactly once; mutation check (removing the mutual check fails 5 tests) | Phase 3 |
 | Evidence links, checkpoints and opening balances are never modified | append-only triggers + raw-SQL tests | Phase 3 |
+| A split's parts add up to the payment exactly; my share is the remainder; friends' shares are positive and unique | `Split` smart constructor (`mkSplit`) + `BalancedLines` + deferred trigger; example tests and two properties; DB property over random splits | Phase 4 |
+| What a person owes = their receivable account's balance (shares minus repayments) | friend shares post to `receivable:<name>`; repayments credit it; tests settle one in full and one partly | Phase 4 |
+| Reported spending counts only my share | spending sums `expense` accounts only (D052); test with a split dinner | Phase 4 |
+| Re-posting a row never changes the bank account's balance on any date | reversal dated like the original (D051); test over every date of the month | Phase 4 |
+| One leg of a transfer or cancelled pair can't be moved on its own | `repostRow` refuses an entry touching `asset:clearing`; tests | Phase 4 |
 | Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI

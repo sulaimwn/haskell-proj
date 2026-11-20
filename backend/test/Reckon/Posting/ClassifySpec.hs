@@ -30,68 +30,93 @@ spec = do
   describe "single rows" $ do
     it "uses the first matching rule, in priority order" $ do
       let rules = [Rule "TIM HORTONS" "expense:coffee", Rule "TIM" "expense:other"]
-          plan = planPosting wellKnown rules [chequing 1 (day 3) "Interac purchase" "Tim Hortons #12" (-250)]
+          plan = planPosting wellKnown rules [] [chequing 1 (day 3) "Interac purchase" "Tim Hortons #12" (-250)]
       map (.counterAccount) plan.postings `shouldBe` ["expense:coffee"]
 
     it "sends a payment to an untracked card to liability:untracked-cards, not spending" $ do
-      let plan = planPosting wellKnown [] [chequing 1 (day 3) "Online Banking payment - 4321" "AMEX CREDIT CARD" (-12000)]
+      let plan = planPosting wellKnown [] [] [chequing 1 (day 3) "Online Banking payment - 4321" "AMEX CREDIT CARD" (-12000)]
       map (.classification) plan.postings `shouldBe` [UntrackedCardPayment]
       map (.counterAccount) plan.postings `shouldBe` ["liability:untracked-cards"]
 
     it "lets a rule override the card-payment guess" $ do
-      let plan = planPosting wellKnown [Rule "AMEX" "expense:gifts"] [chequing 1 (day 3) "Online Banking payment" "AMEX CREDIT CARD" (-12000)]
+      let plan = planPosting wellKnown [Rule "AMEX" "expense:gifts"] [] [chequing 1 (day 3) "Online Banking payment" "AMEX CREDIT CARD" (-12000)]
       map (.counterAccount) plan.postings `shouldBe` ["expense:gifts"]
 
     it "falls back to uncategorized expense or income by sign" $ do
-      let plan = planPosting wellKnown [] [chequing 1 (day 3) "Interac purchase" "SHOP" (-999), chequing 2 (day 4) "Deposit" "" 5000]
+      let plan = planPosting wellKnown [] [] [chequing 1 (day 3) "Interac purchase" "SHOP" (-999), chequing 2 (day 4) "Deposit" "" 5000]
       map (.counterAccount) plan.postings `shouldBe` ["expense:uncategorized", "income:uncategorized"]
 
     it "leaves a zero-amount row for review" $
-      (planPosting wellKnown [] [chequing 1 (day 3) "Fee waived" "" 0]).leftForReview
+      (planPosting wellKnown [] [] [chequing 1 (day 3) "Fee waived" "" 0]).leftForReview
         `shouldBe` [(chequing 1 (day 3) "Fee waived" "" 0, ZeroAmount)]
 
   describe "transfers between my accounts" $ do
     it "pairs opposite amounts in two accounts within 5 days, both via clearing" $ do
       let payment = chequing 1 (day 3) "Online Banking payment - 9876" "RBC VISA" (-50000)
           received = visa 2 (day 5) "PAYMENT - THANK YOU" "" 50000
-          plan = planPosting wellKnown [] [payment, received]
+          plan = planPosting wellKnown [] [] [payment, received]
       sortOn fst [(posting.row.rowId, posting.classification) | posting <- plan.postings]
         `shouldBe` [(1, TransferWith 2), (2, TransferWith 1)]
       map (.counterAccount) plan.postings `shouldBe` ["asset:clearing", "asset:clearing"]
 
     it "doesn't pair rows more than 5 days apart" $ do
-      let plan = planPosting wellKnown [] [chequing 1 (day 3) "Payment" "" (-50000), visa 2 (day 9) "PAYMENT" "" 50000]
+      let plan = planPosting wellKnown [] [] [chequing 1 (day 3) "Payment" "" (-50000), visa 2 (day 9) "PAYMENT" "" 50000]
       map (.classification) plan.postings `shouldBe` [Uncategorized, Uncategorized]
 
     it "leaves every row of an ambiguous transfer for review instead of guessing" $ do
       let rows = [chequing 1 (day 14) "Transfer" "" (-20000), visa 2 (day 15) "PAYMENT" "" 20000, visa 3 (day 16) "RETURN - BOOKSHOP" "" 20000]
-          plan = planPosting wellKnown [] rows
+          plan = planPosting wellKnown [] [] rows
       plan.postings `shouldBe` []
       sort (map (\(row, _) -> row.rowId) plan.leftForReview) `shouldBe` [1, 2, 3]
 
     it "re-posts an earlier uncategorized row when its other half arrives later" $ do
       let earlier = (chequing 1 (day 3) "Payment" "" (-30000)) {alreadyPosted = True}
           arriving = visa 2 (day 4) "PAYMENT" "" 30000
-          plan = planPosting wellKnown [] [earlier, arriving]
+          plan = planPosting wellKnown [] [] [earlier, arriving]
       sort [(posting.row.rowId, posting.replacesExistingEntry) | posting <- plan.postings] `shouldBe` [(1, True), (2, False)]
 
     it "never re-posts two already-posted rows on their own" $ do
       let first = (chequing 1 (day 3) "Payment" "" (-30000)) {alreadyPosted = True}
           second = (visa 2 (day 4) "PAYMENT" "" 30000) {alreadyPosted = True}
-      planPosting wellKnown [] [first, second] `shouldBe` PostingPlan [] []
+      planPosting wellKnown [] [] [first, second] `shouldBe` PostingPlan [] []
 
   describe "cancelled and refunded pairs" $
     it "pairs a sent e-Transfer with its cancellation in the same account" $ do
       let sent = chequing 1 (day 4) "e-Transfer sent" "ALEX EXAMPLE" (-3000)
           cancelled = chequing 2 (day 6) "e-Transfer cancelled" "ALEX EXAMPLE" 3000
-          plan = planPosting wellKnown [] [sent, cancelled]
+          plan = planPosting wellKnown [] [] [sent, cancelled]
       sortOn fst [(posting.row.rowId, posting.classification) | posting <- plan.postings]
         `shouldBe` [(1, CancelledPairWith 2), (2, CancelledPairWith 1)]
+
+  describe "repayments from people I share expenses with" $ do
+    let alexAndSam = [alex, KnownPerson "sam" "SAM" "receivable:sam"]
+        deposit = chequing 1 (day 6) "e-Transfer received" "ALEX EXAMPLE" 3000
+
+    it "leaves money in from a known person for review instead of calling it income" $ do
+      let plan = planPosting wellKnown [] alexAndSam [deposit]
+      plan.postings `shouldBe` []
+      map snd plan.leftForReview `shouldBe` [PossibleRepayment ["alex"]]
+
+    it "names every person the description could be" $ do
+      let plan = planPosting wellKnown [] [alex, KnownPerson "alexander" "ALEX EXAMPLE" "receivable:alexander"] [deposit]
+      map snd plan.leftForReview `shouldBe` [PossibleRepayment ["alex", "alexander"]]
+
+    it "lets a rule override the repayment suggestion" $ do
+      let plan = planPosting wellKnown [Rule "ALEX" "income:other"] alexAndSam [deposit]
+      map (.counterAccount) plan.postings `shouldBe` ["income:other"]
+
+    it "only suggests repayments for money coming in" $ do
+      let sent = chequing 1 (day 6) "e-Transfer sent" "ALEX EXAMPLE" (-3000)
+      map (.counterAccount) (planPosting wellKnown [] alexAndSam [sent]).postings `shouldBe` ["expense:uncategorized"]
+
+    it "doesn't treat a credit on a credit card as a repayment" $ do
+      let credit = visa 1 (day 6) "REFUND" "ALEX EXAMPLE" 3000
+      map (.counterAccount) (planPosting wellKnown [] alexAndSam [credit]).postings `shouldBe` ["income:uncategorized"]
 
   describe "any mix of rows (property)" $ do
     it "posts each new row exactly once or leaves it for review, and pairs always net to zero" $ hedgehog $ do
       rows <- forAll genRows
-      let plan = planPosting wellKnown [Rule "GROCERY" "expense:groceries"] rows
+      let plan = planPosting wellKnown [Rule "GROCERY" "expense:groceries"] [alex] rows
           newRows = sort [row.rowId | row <- rows, not row.alreadyPosted]
           handled = sort (map (.row.rowId) (filter (not . (.replacesExistingEntry)) plan.postings) <> map (\(row, _) -> row.rowId) plan.leftForReview)
       -- Every new row is either posted or waiting for review, exactly once.
@@ -105,6 +130,9 @@ spec = do
       sumCents [posting.row.amount | posting <- plan.postings, posting.counterAccount == wellKnown.clearing] === Cents 0
 
 -- * Generators and helpers
+
+alex :: KnownPerson Text
+alex = KnownPerson "alex" "ALEX" "receivable:alex"
 
 genRows :: Gen [EvidenceRow Int Text]
 genRows = do

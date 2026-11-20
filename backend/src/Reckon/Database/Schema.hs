@@ -115,6 +115,15 @@ OpeningBalance sql=opening_balances
   Primary entryId
   deriving Show Eq
 
+Person sql=people
+  name Text
+  matchText Text
+  ledgerAccountId LedgerAccountId
+  UniquePersonName name
+  UniquePersonMatchText matchText
+  UniquePersonLedgerAccount ledgerAccountId
+  deriving Show Eq
+
 ImportReviewItem sql=import_review_items
   batchId ImportBatchId
   bankAccountId BankAccountId

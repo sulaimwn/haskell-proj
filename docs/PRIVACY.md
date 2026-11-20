@@ -14,7 +14,10 @@ are non-negotiable.
    drop the rest before anything is written to the database.
 4. **Secrets live in `.env`** (gitignored). The Anthropic API key is read by
    the backend only. It is never sent to the frontend or logged.
-5. **Screenshots are sent to Anthropic's API** (from Phase 5). Crop out
+5. **Friends' names are personal data too.** The `people` table (names and
+   the text their e-Transfers contain) lives only in your local database.
+   Fixtures use obviously fake names (ALEX EXAMPLE).
+6. **Screenshots are sent to Anthropic's API** (from Phase 5). Crop out
    anything you don't want to send before uploading.
 
 ## How the rules are enforced
@@ -25,7 +28,7 @@ are non-negotiable.
 | Pre-commit hook (`.githooks/pre-commit`) | Blocks a commit that stages anything under `private/`, any `.env` file, or any data-shaped file (`.csv`, `.ofx`, `.qfx`, `.pdf`, `.png`, `.jpg`, ...) outside the allowed folders (`fixtures/`, `docs/images/`, `frontend/public/`, `frontend/src/assets/`). `make dev` and `make hooks` install it. |
 | CI (`privacy-guard` job) | The same check over every tracked file, so a commit made without the hook still fails CI. |
 | Code | The RBC parser keeps only the last 4 digits (`Last4` can't hold more), `bank_accounts.last4` has a 4-digit CHECK, and a test scans every stored column after an import to prove the full number appears nowhere. |
-| Workflow | `make import` warns if the file isn't under `private/`. `make post`, `make reconcile` and `checkpoint` print real descriptions and amounts to your terminal: when asking for help, share the kind of problem (e.g. "3 rows left for review, ambiguous transfer") or the parser's line-numbered errors, not the output itself. |
+| Workflow | `make import` warns if the file isn't under `private/`. `make post`, `make reconcile`, `owed`, `spending` and `checkpoint` print real descriptions, names and amounts to your terminal: when asking for help, share the kind of problem (e.g. "3 rows left for review, ambiguous transfer") or the parser's line-numbered errors, not the output itself. |
 
 The hook runs **before** the commit, which matters: once something reaches a
 public GitHub repo, you have to treat it as leaked even if you delete it

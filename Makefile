@@ -2,7 +2,7 @@
 # is a thin wrapper so `make help` doubles as the list of things you can do.
 
 .DEFAULT_GOAL := help
-.PHONY: help dev test check codegen import post reconcile migrate migration db-up db-down db-psql db-destroy hooks frontend-check
+.PHONY: help dev test check codegen import post reconcile owed migrate migration db-up db-down db-psql db-destroy hooks frontend-check
 
 help: ## List available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-15s %s\n", $$1, $$2}'
@@ -28,6 +28,9 @@ post: ## Post imported bank rows to the journal (categorize, pair transfers)
 
 reconcile: ## Compare the ledger with every recorded statement balance
 	@scripts/reckon.sh reconcile
+
+owed: ## Show what each person you share expenses with owes you
+	@scripts/reckon.sh owed
 
 migrate: ## Apply pending migrations to the dev and test databases
 	@scripts/migrate.sh

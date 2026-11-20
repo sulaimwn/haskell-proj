@@ -10,7 +10,12 @@ module Reckon.Posting
   , PostingSummary (..)
   , renderPostingSummary
   , postRowManually
+  , recategorizeRow
   , ManualPostingError (..)
+  , loadEvidenceRow
+  , repostRow
+  , RepostError (..)
+  , manualErrorFromRepost
   , addCategorizationRule
   , RuleError (..)
   , wellKnownAccounts
@@ -19,6 +24,7 @@ module Reckon.Posting
 
 import Control.Monad (forM_, when)
 import Control.Monad.IO.Class (MonadIO)
+import Data.Bifunctor (first)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -31,8 +37,9 @@ import Reckon.Database.Schema
 import Reckon.Import.Dedupe (normalizeDescription)
 import Reckon.Ledger (accountTypeFromName, findOrCreateLedgerAccount, postEntry, postReversal)
 import Reckon.Ledger.AccountType (AccountType (..))
-import Reckon.Ledger.Entry (EntryLine (..), mkBalancedLines, mkNewJournalEntry)
+import Reckon.Ledger.Entry (EntryError, EntryLine (..), NewJournalEntry, mkBalancedLines, mkNewJournalEntry)
 import Reckon.Money (Cents (..), negateCents, renderCents)
+import Reckon.People (loadKnownPeople)
 import Reckon.Posting.Classify
 
 -- | The accounts the planner routes to, created on first use.
@@ -61,6 +68,7 @@ postPendingRows :: (MonadIO m) => SqlPersistT m PostingSummary
 postPendingRows = do
   wellKnown <- wellKnownAccounts
   rules <- loadRules
+  people <- loadKnownPeople
   unposted <- loadUnpostedRows
   -- Rows already posted on a guess (uncategorized, or "payment to an
   -- untracked card") can pair with a newly imported row, within the widest
@@ -68,7 +76,7 @@ postPendingRows = do
   pairable <- case map (.transactionDate) unposted of
     [] -> pure []
     dates -> loadRepairableRows wellKnown (addDays (negate cancellationWindowDays) (minimum dates))
-  let plan = planPosting wellKnown rules (unposted <> pairable)
+  let plan = planPosting wellKnown rules people (unposted <> pairable)
 
   forM_ plan.postings $ \planned -> do
     when planned.replacesExistingEntry $ do
@@ -104,29 +112,78 @@ postPendingRows = do
 postRow :: (MonadIO m) => PlannedPosting RawBankRowId LedgerAccountId -> SqlPersistT m ()
 postRow planned = do
   let row = planned.row
-      entryLines =
-        [ EntryLine {ledgerAccountId = row.bankAccount, amount = row.amount}
-        , EntryLine {ledgerAccountId = planned.counterAccount, amount = negateCents row.amount}
-        ]
-  case mkBalancedLines entryLines >>= mkNewJournalEntry row.transactionDate (entryDescription row) of
+  case buildEntry row [(planned.counterAccount, negateCents row.amount)] of
     -- Can't happen: zero-amount rows are left for review, and the two lines
     -- negate each other by construction.
     Left entryError -> error ("postRow: " <> show entryError)
+    Right newEntry -> postWithEvidence row newEntry
+
+-- | The row's amount on its bank's ledger account, and the given amounts on
+-- other accounts. They must add up to zero, or the entry is rejected.
+buildEntry :: EvidenceRow RawBankRowId LedgerAccountId -> [(LedgerAccountId, Cents)] -> Either EntryError NewJournalEntry
+buildEntry row counterLines =
+  mkBalancedLines
+    ( EntryLine {ledgerAccountId = row.bankAccount, amount = row.amount}
+        : [EntryLine {ledgerAccountId = counterAccount, amount} | (counterAccount, amount) <- counterLines]
+    )
+    >>= mkNewJournalEntry row.transactionDate (entryDescription row)
+
+postWithEvidence :: (MonadIO m) => EvidenceRow RawBankRowId LedgerAccountId -> NewJournalEntry -> SqlPersistT m ()
+postWithEvidence row newEntry = do
+  entryId <- postEntry newEntry
+  insert_ JournalEntryEvidence {journalEntryEvidenceEntryId = entryId, journalEntryEvidenceRawBankRowId = row.rowId}
+
+data RepostError
+  = -- | The row's entry in effect is one leg of a transfer or cancelled
+    -- pair. Re-posting one leg would leave the clearing account out of
+    -- balance, so a person has to look at the pair as a whole.
+    RepostPartOfPair
+  | RepostZeroAmount
+  | RepostUnbalanced EntryError
+  deriving stock (Show, Eq)
+
+-- | Posts the row against the given counter amounts (which must add up to
+-- the negated row amount), first reversing its entry in effect, if any. The
+-- reversal is dated like the entry it reverses, so the bank account's
+-- balance on every date is unchanged by the change (D042).
+--
+-- Nothing is written unless everything checks out.
+repostRow :: (MonadIO m) => EvidenceRow RawBankRowId LedgerAccountId -> [(LedgerAccountId, Cents)] -> SqlPersistT m (Either RepostError ())
+repostRow row counterLines = do
+  existing <- currentEntryForRow row.rowId
+  partOfPair <- maybe (pure False) (touchesClearingAccount . fst) existing
+  case buildEntry row counterLines of
+    _ | partOfPair -> pure (Left RepostPartOfPair)
+    _ | row.amount == mempty -> pure (Left RepostZeroAmount)
+    Left entryError -> pure (Left (RepostUnbalanced entryError))
     Right newEntry -> do
-      entryId <- postEntry newEntry
-      insert_ JournalEntryEvidence {journalEntryEvidenceEntryId = entryId, journalEntryEvidenceRawBankRowId = row.rowId}
+      forM_ existing $ \(entryId, occurredOn) -> postReversal entryId occurredOn
+      postWithEvidence row newEntry
+      pure (Right ())
+
+touchesClearingAccount :: (MonadIO m) => JournalEntryId -> SqlPersistT m Bool
+touchesClearingAccount entryId = do
+  found <-
+    rawSql
+      "SELECT EXISTS (SELECT 1 FROM journal_lines l JOIN ledger_accounts a ON a.id = l.ledger_account_id \
+      \WHERE l.entry_id = ? AND a.name = 'asset:clearing')"
+      [PersistInt64 (fromSqlKey entryId)]
+  pure (found == [Single True])
 
 entryDescription :: EvidenceRow rowId account -> Text
 entryDescription row = case (Text.strip row.description1, Text.strip row.description2) of
-  (first, "") -> first
-  ("", second) -> second
-  (first, second) -> first <> " - " <> second
+  (one, "") -> one
+  ("", two) -> two
+  (one, two) -> one <> " - " <> two
 
 data ManualPostingError
   = RowNotFound
   | RowAlreadyPosted
   | UnknownAccount Text
   | ZeroAmountRow
+  | -- | See 'RepostPartOfPair'.
+    RowIsPartOfPair
+  | EntryRejected EntryError
   deriving stock (Show, Eq)
 
 -- | Posts one unposted row against an account you choose: the way to settle
@@ -135,22 +192,50 @@ data ManualPostingError
 -- @asset:clearing@ records them as a transfer.
 postRowManually :: (MonadIO m) => RawBankRowId -> Text -> SqlPersistT m (Either ManualPostingError ())
 postRowManually rowId accountName = do
-  found <-
-    rawSql
-      "SELECT r.id, b.ledger_account_id, b.account_kind, r.transaction_date, r.description_1, r.description_2, r.amount_cents \
-      \FROM raw_bank_rows r JOIN bank_accounts b ON b.id = r.bank_account_id WHERE r.id = ?"
-      [PersistInt64 (fromSqlKey rowId)]
+  found <- loadEvidenceRow rowId
   existing <- currentEntryForRow rowId
-  case (map (toEvidenceRow False) found, existing, accountTypeFromName accountName) of
-    ([], _, _) -> pure (Left RowNotFound)
+  case (found, existing, accountTypeFromName accountName) of
+    (Nothing, _, _) -> pure (Left RowNotFound)
     (_, Just _, _) -> pure (Left RowAlreadyPosted)
     (_, _, Nothing) -> pure (Left (UnknownAccount accountName))
-    (row : _, Nothing, Just accountType)
+    (Just row, Nothing, Just accountType)
       | row.amount == mempty -> pure (Left ZeroAmountRow)
       | otherwise -> do
           counterAccount <- findOrCreateLedgerAccount accountName accountType
           postRow PlannedPosting {row, classification = CategorizedByRule "manual" counterAccount, counterAccount, replacesExistingEntry = False}
           pure (Right ())
+
+-- | Moves an already-posted row to a different account: the way to fix a
+-- row that was categorized by a guess, or before a rule existed. The old
+-- entry is reversed (on its own date) and the row posted again. A row that
+-- isn't posted yet is simply posted. Transfer and cancellation legs can't
+-- be moved on their own.
+recategorizeRow :: (MonadIO m) => RawBankRowId -> Text -> SqlPersistT m (Either ManualPostingError ())
+recategorizeRow rowId accountName = do
+  found <- loadEvidenceRow rowId
+  case (found, accountTypeFromName accountName) of
+    (Nothing, _) -> pure (Left RowNotFound)
+    (_, Nothing) -> pure (Left (UnknownAccount accountName))
+    (Just row, Just accountType) -> do
+      counterAccount <- findOrCreateLedgerAccount accountName accountType
+      first manualErrorFromRepost <$> repostRow row [(counterAccount, negateCents row.amount)]
+
+manualErrorFromRepost :: RepostError -> ManualPostingError
+manualErrorFromRepost = \case
+  RepostPartOfPair -> RowIsPartOfPair
+  RepostZeroAmount -> ZeroAmountRow
+  RepostUnbalanced entryError -> EntryRejected entryError
+
+-- | One imported row, whether or not it has been posted. 'alreadyPosted' is
+-- left False: callers that care ask 'currentEntryForRow'.
+loadEvidenceRow :: (MonadIO m) => RawBankRowId -> SqlPersistT m (Maybe (EvidenceRow RawBankRowId LedgerAccountId))
+loadEvidenceRow rowId = do
+  found <-
+    rawSql
+      "SELECT r.id, b.ledger_account_id, b.account_kind, r.transaction_date, r.description_1, r.description_2, r.amount_cents \
+      \FROM raw_bank_rows r JOIN bank_accounts b ON b.id = r.bank_account_id WHERE r.id = ?"
+      [PersistInt64 (fromSqlKey rowId)]
+  pure (listToMaybe (map (toEvidenceRow False) found))
 
 -- | The row's entry that is still in effect (posted and not reversed), with
 -- its date.
@@ -252,10 +337,10 @@ renderPostingSummary summary =
         [] -> []
         items ->
           ("Left for review (" <> showText (length items) <> "), not posted:")
-            : [ "  #" <> showText (fromSqlKey rowId) <> "  " <> showText date <> "  " <> renderCents amount <> "  " <> description <> "  (" <> renderReason reason <> ")"
+            : [ "  #" <> showText (fromSqlKey rowId) <> "  " <> showText date <> "  " <> renderCents amount <> "  " <> description <> "  (" <> renderReason rowId reason <> ")"
               | (rowId, date, description, amount, reason) <- items
               ]
-              <> ["Decide these yourself with: scripts/reckon.sh post-row ROW_ID ACCOUNT  (e.g. asset:clearing for a transfer leg)"]
+              <> ["Decide these yourself with: scripts/reckon.sh post-row ROW_ID ACCOUNT  (e.g. asset:clearing for a transfer leg, receivable:NAME for a repayment)"]
   where
     postedLines
       | total == 0 = ["Nothing new to post."]
@@ -270,8 +355,11 @@ renderPostingSummary summary =
     total =
       summary.categorizedByRule + summary.transferLegs + summary.cancelledPairLegs
         + summary.untrackedCardPayments + summary.uncategorized
-    renderReason = \case
+    renderReason rowId = \case
       ZeroAmount -> "zero amount"
       AmbiguousPair _ -> "looks like half of a transfer or cancellation, but which rows go together is ambiguous"
+      PossibleRepayment names ->
+        "might be a repayment from " <> Text.intercalate " or " names <> "; if so: scripts/reckon.sh post-row "
+          <> showText (fromSqlKey rowId) <> " receivable:" <> Text.intercalate " or receivable:" names
     showText :: (Show a) => a -> Text
     showText = Text.pack . show

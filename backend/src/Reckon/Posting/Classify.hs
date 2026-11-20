@@ -12,9 +12,13 @@
 --    moving money is never counted as spending, and each account still
 --    matches its own statement on every date.
 -- 3. The first categorization rule whose text appears in the description.
--- 4. A payment to a credit card reckon doesn't track goes to
+-- 4. Money coming in that mentions a person I share expenses with is
+--    probably their repayment. It's left for review with a suggestion, not
+--    posted: counting it as income would be wrong, and applying it to their
+--    receivable on a guess would be a silent error (DECISIONS D050).
+-- 5. A payment to a credit card reckon doesn't track goes to
 --    @liability:untracked-cards@, not to spending.
--- 5. Otherwise @expense:uncategorized@ (money out) or @income:uncategorized@
+-- 6. Otherwise @expense:uncategorized@ (money out) or @income:uncategorized@
 --    (money in).
 --
 -- Pairing is only accepted when it's unambiguous: each row has exactly one
@@ -29,6 +33,7 @@
 module Reckon.Posting.Classify
   ( EvidenceRow (..)
   , Rule (..)
+  , KnownPerson (..)
   , WellKnownAccounts (..)
   , Classification (..)
   , ReviewReason (..)
@@ -41,6 +46,7 @@ module Reckon.Posting.Classify
   , cancellationWindowDays
   ) where
 
+import Data.Either (partitionEithers)
 import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -75,6 +81,16 @@ data Rule account = Rule
   }
   deriving stock (Show, Eq)
 
+-- | Someone I share expenses with, as the planner needs to know them.
+data KnownPerson account = KnownPerson
+  { name :: Text
+  , matchText :: Text
+  -- ^ Upper-case, as stored: appears in the description of their e-Transfers.
+  , account :: account
+  -- ^ Their receivable account.
+  }
+  deriving stock (Show, Eq)
+
 -- | The accounts the planner routes to when no rule applies.
 data WellKnownAccounts account = WellKnownAccounts
   { clearing :: account
@@ -100,6 +116,9 @@ data ReviewReason rowId
     AmbiguousPair [rowId]
   | -- | A zero amount can't be a journal line.
     ZeroAmount
+  | -- | Money in that mentions these people (by name). If it's a repayment,
+    -- post it against that person's receivable account.
+    PossibleRepayment [Text]
   deriving stock (Show, Eq)
 
 data PlannedPosting rowId account = PlannedPosting
@@ -140,14 +159,15 @@ planPosting ::
   (Ord rowId, Eq account) =>
   WellKnownAccounts account ->
   [Rule account] ->
+  [KnownPerson account] ->
   -- | Unposted rows, plus rows posted on a guess (marked 'alreadyPosted')
   -- that may pair with them.
   [EvidenceRow rowId account] ->
   PostingPlan rowId account
-planPosting wellKnown rules rows =
+planPosting wellKnown rules people rows =
   PostingPlan
     { postings = pairPostings <> singlePostings
-    , leftForReview = zeroAmountRows <> ambiguousRows
+    , leftForReview = zeroAmountRows <> ambiguousRows <> repaymentRows
     }
   where
     (zeroRows, nonZeroRows) = partitionOn (\row -> row.amount == mempty) rows
@@ -188,19 +208,31 @@ planPosting wellKnown rules rows =
       , not row.alreadyPosted
       ]
 
-    singlePostings =
-      [ classifySingle row
+    singles =
+      [ row
       | row <- nonZeroRows
       , not row.alreadyPosted
       , not (Set.member row.rowId claimedByPairing)
       ]
+    -- A rule the owner wrote wins over the guess that money in from a
+    -- friend is a repayment.
+    (repaymentRows, singlePostings) = partitionEithers (map classifySingle singles)
 
     classifySingle row = case matchingRule rules row of
-      Just rule -> posting row (CategorizedByRule rule.descriptionContains rule.account) rule.account
-      Nothing
-        | looksLikeCardPayment row -> posting row UntrackedCardPayment wellKnown.untrackedCards
-        | row.amount < mempty -> posting row Uncategorized wellKnown.uncategorizedExpense
-        | otherwise -> posting row Uncategorized wellKnown.uncategorizedIncome
+      Just rule -> Right (posting row (CategorizedByRule rule.descriptionContains rule.account) rule.account)
+      Nothing -> case peopleMentioned row of
+        [] -> Right (classifyByGuess row)
+        names -> Left (row, PossibleRepayment names)
+    classifyByGuess row
+      | looksLikeCardPayment row = posting row UntrackedCardPayment wellKnown.untrackedCards
+      | row.amount < mempty = posting row Uncategorized wellKnown.uncategorizedExpense
+      | otherwise = posting row Uncategorized wellKnown.uncategorizedIncome
+    -- Money arriving in a chequing or savings account whose description
+    -- mentions someone I share expenses with.
+    peopleMentioned row
+      | row.amount > mempty && row.bankAccountKind /= CreditCard =
+          [person.name | person <- people, person.matchText `Text.isInfixOf` searchableDescription row]
+      | otherwise = []
     posting row classification counterAccount =
       PlannedPosting {row, classification, counterAccount, replacesExistingEntry = False}
 

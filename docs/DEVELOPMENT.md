@@ -211,6 +211,68 @@ them). It builds the CLI if needed and uses the dev database.
 `make db-psql` then `SELECT * FROM journal_entries ORDER BY id DESC LIMIT
 20;` shows the raw entries if you want to look.
 
+## Shared expenses
+
+For payments you share with friends (dinner, groceries, a rented cabin).
+Everything here is in `scripts/reckon.sh`, after the rows are imported and
+posted.
+
+1. **Add each person once.** The second argument is the text that appears in
+   the description of *their* e-Transfers to you (take it from a real row
+   in your export). It's matched ignoring case and extra spaces:
+
+   ```bash
+   scripts/reckon.sh add-person alex "ALEX SMITH"
+   ```
+
+   Names are lower-case letters, digits and hyphens. This creates
+   `receivable:alex`, the account that holds what Alex owes you.
+
+2. **Split a payment.** `make post` prints each row's number (the `#42` in
+   its list of review items, or look in `make db-psql`: `SELECT id, ... FROM
+   raw_bank_rows`). To share a $120 dinner equally between you, Alex and
+   Sam, with your share in `expense:food`:
+
+   ```bash
+   scripts/reckon.sh split-row 42 expense:food equal alex sam
+   ```
+
+   Or with exact amounts. You keep the rest:
+
+   ```bash
+   scripts/reckon.sh split-row 42 expense:food alex=45.00 sam=25.00
+   ```
+
+   If the row was already posted (as "uncategorized", say), its entry is
+   reversed and replaced. Transfer legs and cancelled pairs can't be split.
+
+3. **Repayments.** When Alex's e-Transfer shows up, `make post` lists it
+   under "Left for review" as a possible repayment, with the exact command.
+   Apply it:
+
+   ```bash
+   scripts/reckon.sh post-row 57 receivable:alex
+   ```
+
+   If it wasn't a repayment (Alex sent rent money), post it to
+   `income:...` instead.
+
+4. **See who owes what**, and your real spending (only your share):
+
+   ```bash
+   scripts/reckon.sh owed
+   scripts/reckon.sh spending 2026-03-01 2026-03-31
+   ```
+
+5. **Fix a category.** Rules only apply to rows posted *after* they exist.
+   To move one already-posted row: `scripts/reckon.sh recategorize 42
+   expense:restaurants`.
+
+Typing an account name wrong (`expense:foood`) creates a new account, and
+accounts can't be deleted (the journal is append-only), so check what you
+type. `make db-psql` then `SELECT name FROM ledger_accounts ORDER BY name;`
+lists them.
+
 ## Everyday commands
 
 Run `make` with no arguments to see them all.
@@ -226,7 +288,8 @@ Run `make` with no arguments to see them all.
 | `make import file=private/export.csv` | Import an RBC CSV export into the dev database |
 | `make post` | Post imported rows to the journal (rules, transfers, cancellations); lists rows left for review |
 | `make reconcile` | Compare the ledger with every recorded statement balance, and explain any gap |
-| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `add-rule`, `opening-balance`, `checkpoint` (no arguments lists them) |
+| `make owed` | What each person you share expenses with owes you |
+| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `recategorize`, `add-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
 | `make db-psql` | psql shell on the dev database |
 | `make db-down` | Stop Postgres (data is kept in a Docker volume) |
 | `make db-destroy` | Delete the database volume, including everything imported (asks first) |
@@ -274,5 +337,7 @@ merged; add a new one.
 | Tests fail with `TEST_DATABASE_URL is not set` | Run them with `make test`, not bare `cabal test`. |
 | `make post` leaves rows "for review" | By design: it won't guess which rows go together. Settle each with `scripts/reckon.sh post-row ROW_ID ACCOUNT` (see "From import to a reconciled ledger"). |
 | `opening-balance` says it must be before your first transaction | Use a statement balance from a date before the earliest imported row, or the first transaction would be counted twice. |
+| `split-row` says there's no one called alex | Add them first: `scripts/reckon.sh add-person alex "THEIR NAME ON E-TRANSFERS"`. |
+| `split-row` / `recategorize` says a row is one leg of a transfer | By design. Transfers and cancelled pairs are two entries through `asset:clearing` that must stay together. |
 | `No imported bank account ends in 1234` | Import an export for that account first, and use its last 4 digits. |
 | `reckon_test` database doesn't exist | It's created the first time the volume is initialized. If your volume predates that: `make db-psql`, then `CREATE DATABASE reckon_test;` |

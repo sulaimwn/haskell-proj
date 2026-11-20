@@ -498,3 +498,69 @@ e-Transfer descriptions.
 (categorized by rules, and cancelled ones paired). The name only matters
 once repayments are matched to a friend's receivable, which is Phase 4, and
 the real description format is still unverified.
+
+### D049: A split is one entry with several lines on the far side (Phase 4, accepted)
+
+**Context:** A $120 dinner paid from chequing should count as $30 of spending
+and $90 owed to me by three friends.
+**Decision:** The row's entry (still one entry, still linked to its one bank
+row, D039) has a line on the bank account for −$120, and on the other side
+one line per participant: my share in a category, and each friend's share
+in `receivable:<name>`. **My share is whatever the friends' shares leave
+over**, so the parts add up to the payment exactly and the entry can't be
+unbalanced. `equal` splits give any odd cents to me first (the person who
+paid absorbs rounding), then to the friends in the order given. A friend's
+share must be positive, no one may be listed twice, and only a payment *out*
+can be split. These rules are a pure smart constructor (`Reckon.Posting.Split`)
+with property tests.
+**Alternatives:** Several entries per row (one per friend): breaks "one row,
+one entry" and the reconciliation identity. A `splits` table beside the
+entry: a second copy of the amounts that could disagree with the lines.
+
+### D050: Repayments are suggested, never applied automatically (Phase 4, accepted, owner may override)
+
+**Context:** When a friend e-Transfers me back, it should reduce what they
+owe. The owner hadn't answered whether to apply that automatically.
+**Decision:** Taken as the recommended default: a `people` table (name,
+`match_text`, receivable account). Money *coming in* to a chequing or
+savings account whose description contains someone's `match_text` is left
+for review as `PossibleRepayment`, with the exact `post-row` command to
+apply it. It is not posted as income and not applied on a guess. A
+categorization rule the owner wrote still wins.
+**Why:** A wrong automatic match is silent: Alex sends $30 for rent, it
+reduces his dinner debt, and both numbers are wrong with no warning. A
+suggestion costs one command. If the owner prefers automatic matching, it's
+a small change in `Classify`: post a unique match to the person's receivable.
+**Unverified:** How RBC writes the sender's name in an e-Transfer
+description. `match_text` is whatever the owner says it is, so this works
+with any format, but it needs a real description to choose a good one.
+
+### D051: Re-posting by reversal, but never one leg of a pair (Phase 4, accepted)
+
+**Decision:** `split-row` and the new `recategorize` command replace a row's
+entry the way D042 does: reverse the old entry **dated like the original**,
+post the new one, nothing edited. This also settles the known issue that
+rules don't re-categorize the past (one row at a time, on request).
+A row whose entry touches `asset:clearing` (a transfer leg, a cancelled
+pair, or a pair settled by hand) is **refused**: moving one leg alone would
+leave the clearing account out of balance. Nothing is written when a request
+is refused or invalid.
+
+### D052: "Spending" is the expense accounts, and nothing else (Phase 4, accepted)
+
+**Decision:** `spending FROM TO` sums only `expense` accounts. Friends'
+shares sit in receivables (assets), transfers and cancellations in the
+clearing account, card payments in `liability:untracked-cards`, so none of
+them can inflate spending, and reversals cancel out. "Reported spending
+reflects only my share" therefore falls out of the account structure and
+needs no special filter. (The Phase 6 UI adds months and charts.)
+
+### D053: Recognize repayments by stored text, not by parsing the description (Phase 4, accepted, resolves D048)
+
+**Context:** D048 moved "extract the e-Transfer counterparty's name" to
+Phase 4.
+**Decision:** Don't parse. Each person has a `match_text` the owner chooses,
+and a repayment is a description containing it. Parsing would hard-code an
+RBC description format that hasn't been verified against a real export;
+matching a user-supplied string works with whatever the format turns out
+to be, and ambiguity (two people matching) is shown rather than guessed.

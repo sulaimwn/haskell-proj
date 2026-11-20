@@ -402,6 +402,35 @@ CREATE TABLE public.opening_balances (
 
 
 --
+-- Name: people; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.people (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    match_text text NOT NULL,
+    ledger_account_id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT people_match_text_check CHECK (((match_text <> ''::text) AND (match_text = upper(match_text)))),
+    CONSTRAINT people_name_check CHECK ((name ~ '^[a-z0-9][a-z0-9-]*$'::text))
+);
+
+
+--
+-- Name: people_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.people ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.people_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: raw_bank_rows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -596,6 +625,38 @@ ALTER TABLE ONLY public.ledger_accounts
 
 ALTER TABLE ONLY public.opening_balances
     ADD CONSTRAINT opening_balances_pkey PRIMARY KEY (entry_id);
+
+
+--
+-- Name: people people_ledger_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_ledger_account_id_key UNIQUE (ledger_account_id);
+
+
+--
+-- Name: people people_match_text_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_match_text_key UNIQUE (match_text);
+
+
+--
+-- Name: people people_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_name_key UNIQUE (name);
+
+
+--
+-- Name: people people_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_pkey PRIMARY KEY (id);
 
 
 --
@@ -906,6 +967,14 @@ ALTER TABLE ONLY public.opening_balances
 
 
 --
+-- Name: people people_ledger_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -943,4 +1012,5 @@ ALTER TABLE ONLY public.statement_checkpoints
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260922210000'),
     ('20260923120000'),
-    ('20260924090000');
+    ('20260924090000'),
+    ('20260925090000');

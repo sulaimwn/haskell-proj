@@ -4,7 +4,9 @@ import Reckon.Api.TypesSpec qualified as TypesSpec
 import Reckon.Ledger.EntrySpec qualified as EntrySpec
 import Reckon.LedgerSpec qualified as LedgerSpec
 import Reckon.Posting.ClassifySpec qualified as ClassifySpec
+import Reckon.Posting.SplitSpec qualified as SplitSpec
 import Reckon.PostingSpec qualified as PostingSpec
+import Reckon.SharingSpec qualified as SharingSpec
 import Reckon.Reconcile.ExplainSpec qualified as ExplainSpec
 import Reckon.ConfigSpec qualified as ConfigSpec
 import Reckon.Import.DedupeSpec qualified as DedupeSpec
@@ -23,6 +25,8 @@ main = hspec $ do
   describe "Reckon.Import.Dedupe" DedupeSpec.spec
   describe "Reckon.Import" ImportSpec.spec
   describe "Reckon.Posting.Classify" ClassifySpec.spec
+  describe "Reckon.Posting.Split" SplitSpec.spec
   describe "Reckon.Reconcile.Explain" ExplainSpec.spec
   describe "Reckon.Posting" PostingSpec.spec
+  describe "Reckon.Sharing and Reckon.People" SharingSpec.spec
   describe "Reckon.Server" ServerSpec.spec

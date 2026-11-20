@@ -196,6 +196,15 @@ of three `receivable:<friend>` accounts. When a friend's e-Transfer later
 appears in an import, it can be matched to their open receivable. Reported
 spending reflects only my share.
 
+**As built** (DECISIONS D049–D053): a `people` table (a name and the text
+their e-Transfers contain); a split is one entry with a line per participant,
+my share being the remainder; money in that mentions a person is *suggested*
+as their repayment (applied with `post-row`), never applied automatically
+(D050, the owner may override); `recategorize` fixes an already-posted row;
+`owed` and `spending` are CLI reports. Matching is by stored text rather than
+by parsing e-Transfer descriptions (D053). The frontend views for receivables
+and spending are Phase 6.
+
 ### Phase 5: Screenshot ingestion with Claude
 
 Also includes, moved from Phase 3 (D045): pending vs posted (a tip changes

@@ -23,6 +23,7 @@ This grows with every phase. Every new module gets a section.
 - [The ledger (Phase 1)](#the-ledger-phase-1)
 - [Importing bank exports (Phase 2)](#importing-bank-exports-phase-2)
 - [Posting and reconciliation (Phase 3)](#posting-and-reconciliation-phase-3)
+- [Shared expenses (Phase 4)](#shared-expenses-phase-4)
 - [Tests](#tests)
 - [Frontend](#frontend)
 - [Glossary](#glossary)
@@ -37,7 +38,7 @@ This grows with every phase. Every new module gets a section.
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
-| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3). |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -731,6 +732,132 @@ CLI against the dev database, so every command is
 
 ---
 
+## Shared expenses (Phase 4)
+
+Read in order: `Posting.Split` (pure) → `People` → `Posting` (the new
+`repostRow`) → `Sharing` → `Report`. Again the rules are pure and the
+database modules only look things up and write.
+
+### `Reckon.Posting.Split`: a smart constructor for splits
+
+```haskell
+mkSplit    :: Cents -> [(Text, Cents)] -> Either SplitError Split
+equalSplit :: Cents -> [Text] -> Either SplitError Split
+splitParts :: Split -> [(Participant, Cents)]
+```
+
+This is the third use of the smart-constructor idea (after `BalancedLines`
+and `Last4`): `Split`'s constructor isn't exported, so **a `Split` can't be
+invalid**. The one trick: *my share isn't an input*. You pass what each
+friend owes, and `mkSplit` computes mine as the remainder. So the parts add
+up to the payment by construction, and the "my share + friends' shares ≠
+total" bug can't be written.
+
+- `data Participant = Me | Friend Text` is a sum type instead of a
+  `Maybe Text` ("Nothing means me"), so the code that maps parts to accounts
+  must say what it does for each case.
+- `equalShares` uses `divMod`: `base` is the integer quotient, and the first
+  `extra` pieces get one more cent. The properties: the pieces add up to the
+  whole, differ by at most a cent, and never increase.
+- The guards in `mkSplit` use **pattern guards**
+  (`| Just (name, _) <- find ((<= mempty) . snd) shares = ...`): a guard that
+  both tests and binds, so the error carries the offending name.
+
+**Q: Why is my share the remainder instead of a field the user fills in?**
+A: Because then it can't disagree with the rest. If both were inputs, the
+function would need an "amounts don't add up" error, and every caller would
+have to handle it. With the remainder, the only thing that can go wrong is
+that friends' shares *exceed* the payment, which is a real mistake
+(`SharesExceedAmount`), not a bookkeeping inconsistency.
+
+**Q: Who gets the odd cent when $100.01 is split four ways?**
+A: Me, first, then the friends in the order given: 25.01, 25.00, 25.00,
+25.00. The person who paid absorbs the rounding. It's deterministic, tested,
+and written down in DECISIONS D049.
+
+### `Reckon.People`
+
+`addPerson` normalizes the match text exactly as descriptions are
+(`normalizeDescription`: upper case, single spaces), so "alex  smith" and
+"ALEX SMITH" are the same text, and creates `receivable:<name>` with
+`findOrCreateLedgerAccount`. It returns `Either PersonError PersonId`, with
+one constructor per way it can be refused. `isValidPersonName` is a total
+function over `Text.uncons` (no partial `head`).
+
+`whoOwesWhat` is a `forM` over people calling `accountBalanceAsOf`.
+`loadKnownPeople` turns database rows into the planner's `KnownPerson`
+(the planner doesn't know the database exists).
+
+### `Reckon.Posting`: `repostRow`
+
+Phase 3 could only post a row once, or fix a *guess* when its pair arrived.
+Phase 4 generalizes that into one function:
+
+```haskell
+repostRow :: EvidenceRow RawBankRowId LedgerAccountId -> [(LedgerAccountId, Cents)] -> SqlPersistT m (Either RepostError ())
+```
+
+"Reverse the row's entry in effect (dated like the original), post a new
+one made of the bank line plus these counter lines." `recategorize` is
+`repostRow` with one counter line, `split-row` is `repostRow` with several.
+Three things to notice:
+
+1. **Validate, then write.** The new entry is built (`buildEntry`, pure) and
+   the pair check run *before* anything is written. A `case` on
+   `buildEntry row counterLines` with `_ | partOfPair -> ...` alternatives
+   handles every refusal first. So a refused request leaves no trace, and a
+   test compares the journal's entry count before and after.
+2. **Errors are values.** `RepostError` → `ManualPostingError` with
+   `manualErrorFromRepost`, and the CLI turns each into a sentence. There is
+   no `error` call on any path a user can reach.
+3. **`first` from `Data.Bifunctor`** maps over the *Left* of an `Either`
+   (`first manualErrorFromRepost <$> repostRow ...`), where `fmap` would
+   map over the Right.
+
+**Q: Why refuse to split a transfer leg instead of just doing it?**
+A: A transfer is two entries through `asset:clearing` that net to zero.
+Replacing one leg with a split would leave the clearing account holding half
+the transfer forever, and the reconciliation report would be wrong in a way
+that's hard to trace. The refusal says why.
+
+### `Reckon.Sharing`
+
+`splitRow` resolves everything first (the row, the category's account type,
+each friend), plans the split purely, *then* creates the category account,
+and only then calls `repostRow`. Two small idioms:
+
+- `traverse (\name -> (name,) <$> findPersonByName name) names` uses a **tuple
+  section** to keep each name next to its lookup result, so the error can
+  name the first unknown person.
+- The counter lines are built with a list comprehension that has a
+  **pattern in the generator**: `Just account <- [accountFor participant]`
+  drops any participant with no account (impossible after the checks above,
+  but the type doesn't need to know that).
+
+### `Reckon.Report`
+
+One query: sum `journal_lines` on `expense` accounts between two dates,
+grouped by account. The interesting part is what *isn't* there: no filter
+for splits, transfers or reversals. Friends' shares are in receivables,
+transfers in clearing, and reversals cancel arithmetically, so the account
+structure makes "my share only" true by itself.
+
+### Repayments in the planner
+
+`Classify.planPosting` gained a `[KnownPerson account]` argument. Money in
+whose description contains a person's match text, in a non-card account, and
+with no rule claiming it, becomes `PossibleRepayment [names]` in
+`leftForReview` instead of a posting. `partitionEithers` splits the single
+rows into "needs review" (`Left`) and "post it" (`Right`) in one pass.
+
+**Q: Why not apply a repayment automatically when only one person matches?**
+A: Because it's a guess, and a wrong guess is invisible: Alex e-Transfers me
+$30 for concert tickets, it silently reduces his dinner debt, and both
+balances are off with nothing to flag it. Suggesting costs the user one
+command. DECISIONS D050 explains and says how to flip it.
+
+---
+
 ## Tests
 
 `backend/test/Main.hs` runs every spec with **hspec**, a BDD-style framework
@@ -813,6 +940,17 @@ Phase 3 adds:
 fails 5 tests. Dating the re-post reversal a day late fails the late-pairing
 test. Both were tried and reverted: the tests catch real mistakes.
 
+Phase 4 adds:
+
+| Spec | What it proves |
+|---|---|
+| `Posting.SplitSpec` | Pure: each `SplitError`, equal splits (including odd cents), and **properties**: any valid split's parts are positive and add up to the payment, friends who ask for more than was paid are always refused, `equalShares` adds up and differs by at most a cent. |
+| `Posting.ClassifySpec` (extended) | Repayment suggestions: money in from a known person goes to review, every matching person is named, a rule overrides, money out and card credits are not suggestions. The main property now includes a person. |
+| `SharingSpec` | Against the database with `fixtures/rbc/shared-dinner.csv`: a dinner split four ways leaves only my $30 as spending, each friend owing $30; repayments settle a receivable in full and in part; the bank balance still equals the posted rows on every date; exact-amount splits; an invalid split, unknown person or unknown account **changes nothing**; a transfer leg is refused; `recategorize`; people are unique by name and match text, and the database rejects bad rows when Haskell is bypassed. And a **property**: for random shares and a random remainder, the entry holds exactly the shares and my part, and they add up to what left the bank. |
+
+`ScenarioSupport` holds the helpers `PostingSpec` and `SharingSpec` share
+(`Scenario`, `importCsv`, `postedRows`, `entryLinesForRow`, ...).
+
 Tests never delete anything (the journal forbids it). Each test makes its
 own accounts with a unique suffix, and `make test` recreates the test
 database on each run (DECISIONS D026).
@@ -881,4 +1019,9 @@ exhaustiveness checking across the language boundary.
 | **Opening balance** | The account's balance before its first imported transaction, entered from a statement, posted against `equity:opening-balance`. |
 | **Natural balance** | A balance with the sign a person expects: money in chequing, money owed on a card. The ledger stores raw debits (+) and credits (−). |
 | **Reconciliation identity** | Ledger balance = opening balance + posted rows, for every account and date. |
+| **Receivable** | `receivable:<name>`: an asset account holding what a friend owes me. Their share of a split debits it; their repayment credits it. |
+| **Split** | One bank row shared between me and friends: one entry whose far side has a line per participant. |
+| **Repost** | Replace a row's entry: reverse the old one (dated like the original) and post a new one. Never an edit. |
+| **Tuple section** | `(name,)` is shorthand for a function that pairs `name` with its argument. |
+| **Pattern guard** | A guard that also binds: `| Just x <- lookup key table = ...`. |
 | **Applicative style** | `Record <$> action1 <*> action2`: run several actions and combine their results into one value. |

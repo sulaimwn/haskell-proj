@@ -40,11 +40,15 @@ library
     Reckon.Ledger.AccountType
     Reckon.Ledger.Entry
     Reckon.Money
+    Reckon.People
     Reckon.Posting
     Reckon.Posting.Classify
+    Reckon.Posting.Split
     Reckon.Reconcile
     Reckon.Reconcile.Explain
+    Reckon.Report
     Reckon.Server
+    Reckon.Sharing
 
   other-modules:   Paths_reckon
   autogen-modules: Paths_reckon
@@ -116,8 +120,11 @@ test-suite reckon-test
     Reckon.Ledger.EntrySpec
     Reckon.LedgerSpec
     Reckon.Posting.ClassifySpec
+    Reckon.Posting.SplitSpec
     Reckon.PostingSpec
     Reckon.Reconcile.ExplainSpec
+    Reckon.ScenarioSupport
+    Reckon.SharingSpec
     Reckon.ServerSpec
     Reckon.TestSupport
 
