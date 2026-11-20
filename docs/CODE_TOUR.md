@@ -24,6 +24,7 @@ This grows with every phase. Every new module gets a section.
 - [Importing bank exports (Phase 2)](#importing-bank-exports-phase-2)
 - [Posting and reconciliation (Phase 3)](#posting-and-reconciliation-phase-3)
 - [Shared expenses (Phase 4)](#shared-expenses-phase-4)
+- [Reading screenshots with Claude (Phase 5)](#reading-screenshots-with-claude-phase-5)
 - [Tests](#tests)
 - [Frontend](#frontend)
 - [Glossary](#glossary)
@@ -38,7 +39,7 @@ This grows with every phase. Every new module gets a section.
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
-| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4). |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4); `import-screenshots`, `provisional`, `release-provisional`, `eval-screenshots` (Phase 5). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -858,6 +859,130 @@ command. DECISIONS D050 explains and says how to flip it.
 
 ---
 
+## Reading screenshots with Claude (Phase 5)
+
+Read in order: `Screenshot.Extraction` → `Screenshot.Align` → `Screenshot.Match` →
+`Anthropic` → `Screenshot.Store` → `Screenshot.Import`. The first three (and
+`Screenshot.Score`) are **pure**; `Anthropic` has a pure core and a thin IO layer;
+`Store` and `Import` are the database and orchestration.
+
+### `Reckon.Screenshot.Extraction`: trust nothing the model says
+
+Two halves. **What we ask:** `extractionSchema` (a JSON Schema built with aeson's `object`
+and `.=`) and `extractionInstructions` (the prompt). **What we accept:**
+
+```haskell
+parseExtraction :: Day -> ByteString -> Either [ExtractionError] ExtractedScreenshot
+```
+
+- The model's reply goes through aeson twice: first into a plain `RawRow` (all text and
+  booleans, using `withObject` and `.:`), then each row is *checked* into an `ExtractedRow`
+  (a real `Day`, exact `Cents`, a `Section`). `onlyKeys` rejects any field the schema doesn't
+  have, so a reply can't smuggle extra data in.
+- **Errors are collected, not short-circuited.** Rows are checked with `either (Left . BadRow
+  index) Right`, and `partitionEithers` splits failures from successes, so the user sees every
+  bad row at once. (Same idea as the CSV parser.)
+- `checkRow` is a `do` block in `Either RowProblem`: each line either continues or aborts the
+  row with a specific `RowProblem`. `when (Text.null description) (Left EmptyDescription)` is
+  the idiom for "fail unless".
+- `inferDate` is one line of real logic: `find (<= takenOn)` over the same month and day in the
+  years counting back from the screenshot's, using `fromGregorianValid` so 30 February simply
+  isn't a candidate and 29 February is found in the last leap year. A hedgehog property checks
+  it against its definition for thousands of random screenshot days.
+- `parseDisplayedAmount` reuses the CSV's `parseCents`, after stripping `$`, commas, `CAD`,
+  Unicode minus and brackets. There is still no floating point anywhere.
+
+**Q: Why not ask the model for the year, or for the amount as a number?**
+A: Because it would sometimes be wrong, and wrong *confidently*. The year is a rule ("the most
+recent date that isn't in the future") that code applies the same way every time. A number
+could arrive as `12.340000000000001`. Amounts as text, parsed by the same code as the CSV, mean
+a screenshot row and a CSV row of the same transaction are exactly equal.
+
+**Q: What happens if the model returns garbage?**
+A: The whole reply is rejected with every problem listed, nothing is stored or posted, and the
+image isn't recorded, so the same command can simply be run again. That's tested with a fixture
+that has one of each kind of bad row.
+
+### `Reckon.Screenshot.Align`: joining a scroll
+
+```haskell
+alignScreenshots :: (Eq identity) => (row -> identity) -> [[row]] -> Alignment row
+```
+
+Generic in the row type: the tests use `Char`s, production uses `(uploadId, ExtractedRow)` so
+the database knows which upload each row came from. A left `foldl` carries what's been joined
+so far; for each next screenshot, `overlapLengths` lists every `k` where the last `k` joined
+rows equal the first `k` of the next. One `k`: join. Several: take the largest and warn.
+None: try the reverse (wrong order), else warn and concatenate.
+
+**Q: Why not just deduplicate rows?**
+A: Because two $4.50 coffees on one day are two transactions. Deduplicating by content would
+silently delete one. Aligning by *position* (the overlap is a run at the end of one list and the
+start of the next) keeps both, and it's only ambiguous when the whole overlap is made of identical
+rows, which is reported.
+
+### `Reckon.Screenshot.Match`: which row is which
+
+`planMatches :: [Provisional p] -> [Later l] -> [Match p l]`. Two stages (same amount; then a
+pending hold that posted for a different amount), each built from `matchGroups`:
+
+- Rows alike in date, words and amount are grouped (`groupAlike` with a `Map`). Groups are
+  matched when each is the other's only candidate (the same rule as transfer pairing), then
+  their members pair off in order.
+- `descriptionsAgree` is deliberately loose (a shared word that isn't PURCHASE or PAYMENT),
+  because it only decides together with amount, dates and uniqueness. It's the weakest
+  heuristic in the phase, and says so (DECISIONS D057).
+
+### `Reckon.Anthropic`: a small client
+
+- **`ApiKey`** is a newtype with a hand-written `Show` that prints `ApiKey <redacted>`. Anything
+  that contains it (including `AnthropicConfig`, which derives `Show`) therefore can't leak it.
+- **`buildRequestBody :: Text -> ImageInput -> Value`** and **`readResponse :: Value -> Either
+  ClientError ByteString`** are pure and tested. `readResponse` handles `stop_reason`:
+  `refusal` and `max_tokens` are errors, thinking blocks are ignored, text blocks are joined.
+- **`type Extractor = ImageInput -> IO (Either ClientError ByteString)`** is the seam: the real
+  one is `anthropicExtractor config`, and tests use any function of that type. Dependency
+  injection with no framework: a function argument.
+- `sendOnce` uses `try` and shows only an exception's *content* (`HttpExceptionRequest _
+  content`), because the whole exception includes the request, headers and all.
+- Retries are a small recursive function over a counter, with a doubling pause.
+
+**Q: How do you test code that calls an external API without calling it?**
+A: Three layers. The pure request and response code is tested directly. The IO function is
+tested against a stub server run in-process with `testWithApplication` that records requests
+(headers, body) and returns canned replies, including 429s and errors. Everything above the
+`Extractor` seam is tested with a scripted fake. No test needs a key or a network.
+
+### `Reckon.Screenshot.Store`: provisional entries and their resolutions
+
+`storeScreenshots` runs in the caller's transaction and does, in order: insert uploads; join the
+screenshots; number identical rows with `assignOccurrences` (from the CSV dedupe); skip rows
+already stored; resolve rows the CSV already has; reverse older pending holds that these rows
+replace; post what's left as provisional entries.
+
+`confirmProvisionalRows` is called first by `postPendingRows`. It builds a `Map` from bank
+account to its open provisional rows (`Map.fromListWith (flip (<>))` keeps order), matches each
+with that account's unposted CSV rows, and for each match reverses the entry and records a
+resolution.
+
+**Q: Why reverse a provisional entry instead of just editing it to the real amount?**
+A: The journal is append-only. A reversal dated like the original makes the account's balance on
+every date exactly what it would have been had the provisional entry never existed, and the
+CSV row then lands on its own date. The history shows what was believed, and when.
+
+### `Reckon.Screenshot.Import` and the CLI
+
+`importScreenshots` is an `ExceptT ImportScreenshotsError IO`: `throwError` for each way to
+stop, `ExceptT (either ... <$> action)` to lift an `IO (Either e a)` in. The order is the point:
+cheap, offline checks first (account, image type, hash), then the costly model calls, then one
+database transaction. `renderImportScreenshotsOutcome` turns the result into the text the
+command prints, including a warning per alignment problem.
+
+`scripts/reckon.sh import-screenshots LAST4 [--taken DATE] FILE...`, `provisional`,
+`release-provisional ID` and `eval-screenshots DIR` are the new commands.
+
+---
+
 ## Tests
 
 `backend/test/Main.hs` runs every spec with **hspec**, a BDD-style framework
@@ -948,6 +1073,21 @@ Phase 4 adds:
 | `Posting.ClassifySpec` (extended) | Repayment suggestions: money in from a known person goes to review, every matching person is named, a rule overrides, money out and card credits are not suggestions. The main property now includes a person. |
 | `SharingSpec` | Against the database with `fixtures/rbc/shared-dinner.csv`: a dinner split four ways leaves only my $30 as spending, each friend owing $30; repayments settle a receivable in full and in part; the bank balance still equals the posted rows on every date; exact-amount splits; an invalid split, unknown person or unknown account **changes nothing**; a transfer leg is refused; `recategorize`; people are unique by name and match text, and the database rejects bad rows when Haskell is bypassed. And a **property**: for random shares and a random remainder, the entry holds exactly the shares and my part, and they add up to what left the bank. |
 
+Phase 5 adds:
+
+| Spec | What it proves |
+|---|---|
+| `Screenshot.ExtractionSpec` | Dates (`Feb 14`, `Today`, 29 February, an explicit year, refusals), a **property** that `inferDate` is the latest matching date not after the screenshot, amounts as exact cents, and `parseExtraction` over the **fake recorded replies** in `fixtures/screenshots`: year inferred, signs from direction, partial rows dropped, uncertain rows kept, the whole reply rejected with every problem listed (including an account-number-shaped digit run), extra fields and non-JSON rejected. |
+| `Screenshot.AlignSpec` | Joining by overlap, **identical rows kept**, ambiguity reported with the longest used, no overlap, wrong order, and a **property**: any scroll over distinct rows joins back exactly with no warnings. The two fake screenshots join into 8 rows with both coffees. |
+| `Screenshot.MatchSpec` | Each rule of D057 by example (same amount, dates, a shared word, ambiguity, identical rows as a group, a pending hold posting for less), and **properties**: matches are one to one; `descriptionsAgree` is symmetric. |
+| `Screenshot.ScoreSpec` | The evaluation scorer: perfect, missed, invented, misread description, misread amount. |
+| `AnthropicSpec` | The request body (JSON-Schema format, base64 image, none of the parameters newer models reject), the response reader (thinking blocks, refusal, truncation), the redacted key, media type by magic bytes, and the real HTTP code against an **in-process stub server**: headers, retry on 429, no retry on 400, an unreachable host, and that the key never appears in an error. |
+| `ScreenshotSpec` | Against the database with a **scripted fake extractor**: a two-screenshot scroll posts 7 provisional entries and holds the uncertain row; the same images or rows aren't read twice; the bank's CSV then confirms all eight and the ledger equals the CSV's on every date; the CSV-first order posts nothing for screenshots; a pending hold is replaced by its posted version and a released one is reversed; an unusable reply, an API error, a non-image and an unknown account store nothing and don't call the model; the reconciliation report names provisional rows as the gap; raw SQL: rows and uploads can't be changed and a contradictory resolution is refused. |
+
+**Mutation checks.** Four bugs were planted and each was caught by a different test: confirming
+without reversing the provisional entry, posting the uncertain rows, never checking the CSV for
+rows it already has, and choosing the shortest overlap. All reverted.
+
 `ScenarioSupport` holds the helpers `PostingSpec` and `SharingSpec` share
 (`Scenario`, `importCsv`, `postedRows`, `entryLinesForRow`, ...).
 
@@ -1024,4 +1164,9 @@ exhaustiveness checking across the language boundary.
 | **Repost** | Replace a row's entry: reverse the old one (dated like the original) and post a new one. Never an edit. |
 | **Tuple section** | `(name,)` is shorthand for a function that pairs `name` with its argument. |
 | **Pattern guard** | A guard that also binds: `| Just x <- lookup key table = ...`. |
+| **Provisional entry** | A journal entry posted from a screenshot row. It shows in the ledger until a bank row confirms it, when it is reversed (dated like the original). |
+| **Open / resolved** | A screenshot row is open until it has a `provisional_resolutions` row: confirmed by a CSV, already in a CSV, superseded by a later screenshot, or released. |
+| **Extractor** | A function from an image to the model's reply text: the seam that lets every test run without the real API. |
+| **Overlap** | The rows shared by the bottom of one screenshot and the top of the next. |
+| **ExceptT** | A monad transformer that adds early exit with an error (`throwError`) to another monad. `importScreenshots` stops at the first failure. |
 | **Applicative style** | `Record <$> action1 <*> action2`: run several actions and combine their results into one value. |

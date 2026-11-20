@@ -564,3 +564,144 @@ and a repayment is a description containing it. Parsing would hard-code an
 RBC description format that hasn't been verified against a real export;
 matching a user-supplied string works with whatever the format turns out
 to be, and ambiguity (two people matching) is shown rather than guessed.
+
+### D054: A raw-HTTP Claude client, with the model chosen by an environment variable (Phase 5, accepted, owner may override the model)
+
+**Context:** Phase 5 sends screenshots to the Anthropic Messages API from the
+backend. There is no official Haskell SDK.
+**Decision:** `Reckon.Anthropic` is a small client over `http-client`: one
+request shape (an image plus instructions, the reply constrained to a JSON
+Schema with `output_config.format`) and one response shape. The request
+builder and response parser are pure and tested; only `anthropicExtractor`
+touches the network. Tests never reach the real API: they use a fake
+`Extractor` (a function from an image to the model's reply text), recorded
+fake replies in `fixtures/screenshots`, and an in-process stub server that
+checks headers, retries and error handling.
+- The model ID comes from `ANTHROPIC_MODEL` and **defaults to
+  `claude-opus-5-5`**. That default was chosen without the owner's input:
+  it's the most capable current model, but also the most expensive way to read
+  a screenshot. The way to decide is to run `eval-screenshots` on labelled
+  screenshots with a cheaper model and compare (D060).
+- The request sets nothing the newer models reject: no sampling parameters,
+  no forced `tool_choice`, no thinking budget. Structured output replaces a
+  forced tool call.
+- **The key** is read from `ANTHROPIC_API_KEY`, sent only as a request
+  header, and can't be printed: `ApiKey` has a hand-written `Show`, the
+  request's `x-api-key` header is marked redacted, and errors are built from
+  the response (or an exception's *content*, never the request). A test
+  asserts the key appears in no error or `show` output.
+- 429 and 5xx responses are retried twice with a growing pause.
+
+### D055: The model transcribes; Haskell interprets and refuses (Phase 5, accepted)
+
+**Decision:** The model is asked only to copy what's on screen: the date as
+displayed ("Feb 14", "Today"), the amount as displayed ("-$12.34"), a
+direction (debit, credit, unknown), pending or posted, a running balance if
+shown, whether it was unsure, and whether the row is cut off. Everything
+that needs judgement or arithmetic happens in `Reckon.Screenshot.Extraction`:
+- **The year is inferred in code**: the most recent such date that isn't
+  after the day the screenshot was taken (`--taken`, default today). "Today"
+  and "Yesterday" are read against the same day.
+- Amounts become exact cents by the same parser as the CSV. The sign comes
+  from the direction; a minus sign contradicting "credit" is an error.
+- **Strict, all-or-nothing:** an extra or missing field, an unknown
+  direction, an unreadable date or amount, a zero amount, or an empty
+  description rejects the *whole* response and lists every problem with its
+  row number, like a bad CSV. Nothing is stored, and the image can be
+  retried because it was never recorded.
+- **Account numbers can't get in:** a run of nine or more digits in a
+  description or the account label is rejected. The model is told never to
+  return one; this checks that it didn't. (A heuristic, and unverified
+  against real descriptions.)
+- Rows cut off at a screen edge are dropped (they appear whole in the
+  neighbouring screenshot). Rows the model marked uncertain are stored but
+  never posted.
+**Why:** A model that "helpfully" fills in a year, or does arithmetic, can be
+confidently wrong. Code that refuses is easier to trust than a prompt that
+asks nicely.
+
+### D056: Joining a scroll by its overlap, and saying when it's ambiguous (Phase 5, accepted)
+
+**Decision:** Screenshots of one scroll are given to `import-screenshots`
+top of the list first. For each next screenshot, `alignScreenshots` finds
+the longest run of rows at the end of what's been joined that equals the
+start of the next one, and joins there. Rows are "the same" when their date,
+words, amount, section and running balance (if shown) match.
+- Two coffees in a row aren't duplicates to drop: they only overlap if the
+  next screenshot's start matches the previous one's end.
+- When more than one overlap length fits (identical rows with no balance to
+  tell them apart), the **longest** is used, since it invents the fewest
+  rows, and a warning says so.
+- No shared rows at all: a warning that transactions between them may be
+  missing. Screenshots given in the wrong order: noticed, joined the right way
+  round, with a warning.
+- Rows already stored from an earlier import are skipped by the same
+  identity scheme as CSVs (account, date, fingerprint, occurrence), so
+  overlap between *separate* imports is handled too.
+
+### D057: Matching provisional rows to the bank's, unambiguously (Phase 5, accepted)
+
+**Decision:** `planMatches` decides which provisional row is which later row
+(a CSV row, or a later screenshot's posted row). Same discipline as transfer
+pairing (D041): a match needs each to be the other's *only* candidate.
+- Same amount: dates within 3 days, and a meaningful word in common ("Interac
+  purchase - COFFEE CO" in an export is "Coffee Co" in the app; generic
+  words like PURCHASE don't count).
+- A pending hold that posted for a different amount (a $100.00 gas hold
+  posting at $43.20): only for pending rows, the same direction of money,
+  within 7 days after the hold, with a word in common.
+- Identical rows (two coffees on a day) are interchangeable, so they're
+  matched as a group, in order. A screenshot with three where the bank has
+  two leaves the third unmatched.
+**Unverified:** the window sizes and what counts as "a word in common" are
+assumptions until checked against real exports and screenshots.
+
+### D058: Screenshots are their own evidence, posted provisionally and resolved by reversal (Phase 5, accepted, supersedes the spec's "raw_bank_rows with source = screenshot")
+
+**Context:** The spec put screenshot rows in `raw_bank_rows` with a source and
+a confidence. But those rows are append-only and their identity is tied to CSV
+fingerprints, and a screenshot row has different life: it's provisional, and
+gets confirmed, replaced or released.
+**Decision:** Four tables (migration `20260926090000_create_screenshots.sql`):
+`screenshot_uploads` (hash, model, the validated reply), `screenshot_rows`,
+`screenshot_entry_evidence` (which entry was posted from which row) and
+`provisional_resolutions`. A row read with confidence is posted as an
+entry ("(provisional) ...") so the ledger shows it. It stays *open* until:
+- `confirmed_by_csv`: a CSV row for the same transaction is posted (`make
+  post`): the provisional entry is **reversed, dated like the original**, and
+  the CSV row is posted the normal way;
+- `already_in_csv`: the CSV row was already there when the screenshot was
+  read, so nothing is posted;
+- `superseded_by_screenshot`: a later screenshot shows a pending hold posted;
+- `released`: the owner says a hold never posted (`release-provisional`).
+A database CHECK ties each kind to the columns it needs. A CSV row can be
+claimed by at most one screenshot row (UNIQUE). Nothing is edited or deleted.
+
+### D059: The reconciliation identity now includes open provisional rows (Phase 5, accepted)
+
+**Decision:** For every bank account and date: ledger balance = opening
+balance + posted CSV rows + **open provisional rows**. When a statement
+disagrees with the ledger by exactly the open provisional rows, the report
+says so (`ProvisionalRowsExplainGap`): the statement doesn't have them yet,
+and the bank's CSV will confirm them. Once confirmed, the identity is the
+Phase 3 one again.
+
+### D060: Phase 5 scope as built, and what is unverified (Phase 5, accepted, scope change)
+
+**Decision:**
+- **CLI first.** `import-screenshots LAST4 [--taken DATE] FILE...` reads
+  images from disk. The HTTP upload endpoint and the upload page are Phase 6
+  with the rest of the frontend. The account is named by its last 4 digits,
+  not read from the screen (the model never returns account numbers), and
+  must already be registered by a CSV import.
+- **Pending transactions and holds** (moved here from Phase 3, D045) work
+  as D057/D058 describe.
+- **The evaluation script** is `reckon-cli eval-screenshots DIR`: pairs of
+  image and hand-written label in `private/eval`, scored for rows found,
+  missed and invented, and field accuracy. Never committed; the scoring is
+  ordinary tested code.
+- **Unverified:** nothing in this phase has talked to the real API or seen a
+  real RBC screenshot. The prompt, the schema, the heuristics (nine-digit
+  guard, windows, "a word in common") and the default model are all
+  untested against reality. `eval-screenshots` on a handful of real
+  screenshots is the first thing to run.

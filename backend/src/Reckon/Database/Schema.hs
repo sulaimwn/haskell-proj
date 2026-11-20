@@ -22,6 +22,7 @@ import Reckon.Bank (BankAccountKind, Last4)
 import Reckon.Import.Dedupe (Fingerprint, ReviewItemKind)
 import Reckon.Ledger.AccountType (AccountType)
 import Reckon.Money (Cents)
+import Reckon.Screenshot.Resolution (ResolutionKind)
 
 -- Each block generates a record type (e.g. 'LedgerAccount'), a key type
 -- ('LedgerAccountId', distinct per table, so an entry id can never be
@@ -122,6 +123,46 @@ Person sql=people
   UniquePersonName name
   UniquePersonMatchText matchText
   UniquePersonLedgerAccount ledgerAccountId
+  deriving Show Eq
+
+ScreenshotUpload sql=screenshot_uploads
+  fileSha256 Text sql=file_sha256
+  fileName Text
+  bankAccountId BankAccountId
+  takenOn Day
+  modelId Text
+  accountLabel Text
+  extractionJson Text
+  partialRowsDropped Int
+  UniqueScreenshotUpload fileSha256
+  deriving Show Eq
+
+ScreenshotRow sql=screenshot_rows
+  uploadId ScreenshotUploadId
+  bankAccountId BankAccountId
+  transactionDate Day
+  description Text
+  amountCents Cents
+  runningBalanceCents Cents Maybe
+  isPending Bool
+  uncertain Bool
+  fingerprint Fingerprint
+  occurrence Int
+  UniqueScreenshotRow bankAccountId transactionDate fingerprint occurrence
+  deriving Show Eq
+
+ScreenshotEntryEvidence sql=screenshot_entry_evidence
+  entryId JournalEntryId
+  screenshotRowId ScreenshotRowId
+  Primary entryId screenshotRowId
+  deriving Show Eq
+
+ProvisionalResolution sql=provisional_resolutions
+  screenshotRowId ScreenshotRowId
+  kind ResolutionKind
+  rawBankRowId RawBankRowId Maybe
+  supersededByScreenshotRowId ScreenshotRowId Maybe sql=superseded_by_screenshot_row_id
+  Primary screenshotRowId
   deriving Show Eq
 
 ImportReviewItem sql=import_review_items

@@ -207,6 +207,14 @@ and spending are Phase 6.
 
 ### Phase 5: Screenshot ingestion with Claude
 
+**As built** (DECISIONS D054-D060): a small raw-HTTP client (there's no official Haskell SDK) with the
+model chosen by `ANTHROPIC_MODEL`; the model only transcribes and Haskell does the arithmetic and
+refuses anything off (D055); overlapping screenshots are joined by their overlap (D056); screenshot
+rows live in their own tables, not `raw_bank_rows`, are posted provisionally, and resolve by
+reversal (D058). The HTTP upload endpoint and upload page are Phase 6: for now it's `import-screenshots`
+on the command line, naming the account by its last 4 digits. The evaluation script is
+`eval-screenshots`.
+
 Also includes, moved from Phase 3 (D045): pending vs posted (a tip changes
 the amount) and pending debit holds, as provisional entries replaced by
 reversal when the posted row arrives.

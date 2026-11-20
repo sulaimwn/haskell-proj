@@ -1,0 +1,11 @@
+{
+  "accountLabel": "Chequing",
+  "transactions": [
+    {"dateText": "Feb 19", "description": "SHELL GAS STATION", "amountText": "-$100.00", "direction": "debit", "section": "pending", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 19", "description": "PAYROLL DEPOSIT EXAMPLE EMPLOYER", "amountText": "$1,500.00", "direction": "credit", "section": "posted", "runningBalanceText": "$2,874.10", "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "COFFEE CO", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "COFFEE CO", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 17", "description": "CORNER GROCERY", "amountText": "-$42.17", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 16", "description": "EXAMPLE HYD", "amountText": "-$85", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": true, "partial": true}
+  ]
+}

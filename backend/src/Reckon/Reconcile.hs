@@ -33,6 +33,7 @@ import Reckon.Ledger.AccountType (AccountType (..), naturalBalance)
 import Reckon.Ledger.Entry (EntryLine (..), mkBalancedLines, mkNewJournalEntry)
 import Reckon.Money (Cents (..), negateCents, renderCents)
 import Reckon.Reconcile.Explain
+import Reckon.Screenshot.Store (openProvisionalEntriesFor)
 
 -- | The bank account whose number ends in these 4 digits. Fails if none, or
 -- more than one (e.g. a chequing account and a card with the same ending).
@@ -153,6 +154,7 @@ reconcileAccount (Entity bankAccountId bankAccount) asOf statementBalance = do
     rawSql
       "SELECT first_date, last_date FROM import_batch_coverage WHERE bank_account_id = ?"
       [accountParameter]
+  provisional <- openProvisionalEntriesFor bankAccountId asOf
   opening <- currentOpeningBalance bankAccountId
   firstDate <- earliestTransactionDate bankAccountId
   let inputs =
@@ -162,6 +164,7 @@ reconcileAccount (Entity bankAccountId bankAccount) asOf statementBalance = do
           , ledgerBalance
           , unpostedRows = summaries unposted
           , possibleDuplicates = summaries duplicates
+          , provisionalRows = [EvidenceSummary {transactionDate = date, description, naturalAmount = toNatural amount} | (date, description, amount) <- provisional]
           , openingBalanceDate = fmap (openingBalanceAsOfDate . entityVal) opening
           , firstTransactionDate = firstDate
           , coveredRanges = [(start, end) | (Single start, Single end) <- covered]
@@ -201,6 +204,9 @@ renderReconciliationReport report =
       Reconciled -> ["  RECONCILED: the ledger matches the statement to the cent."]
       UnpostedRowsExplainGap rows ->
         ("  These " <> showText (length rows) <> " imported row(s) aren't posted yet, and posting them closes the gap exactly (make post says why each is waiting):")
+          : map renderRow rows
+      ProvisionalRowsExplainGap rows ->
+        ("  These " <> showText (length rows) <> " row(s) were read from screenshots and are in the ledger provisionally. The statement doesn't have them yet, and they account for the gap exactly (the bank's CSV will confirm them):")
           : map renderRow rows
       UnpostedRowMatchesGap row -> ["  This unposted row's amount equals the gap:", renderRow row]
       NoOpeningBalance difference ->

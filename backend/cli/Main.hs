@@ -14,6 +14,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Database.Persist (Entity)
 import Database.Persist.Sql (ConnectionPool, SqlPersistT, runSqlPool, toSqlKey)
 import Reckon.Bank (Last4, mkLast4)
+import Reckon.Anthropic (AnthropicConfig (..), anthropicExtractor, loadAnthropicConfig)
 import Reckon.Config (Config (..), loadConfig)
 import Reckon.Database (createDatabasePool)
 import Reckon.Database.Schema (BankAccount)
@@ -25,6 +26,9 @@ import Reckon.Posting (ManualPostingError (..), RuleError (..), addCategorizatio
 import Reckon.Posting.Split (SplitError (..))
 import Reckon.Reconcile
 import Reckon.Report (renderSpending, spendingByAccount)
+import Reckon.Screenshot.Eval (evaluateScreenshots)
+import Reckon.Screenshot.Import (ScreenshotFile (..), importScreenshots, renderImportScreenshotsError, renderImportScreenshotsOutcome)
+import Reckon.Screenshot.Store (ReleaseError (..), openProvisionalRows, releaseProvisional, renderOpenProvisional)
 import Reckon.Sharing (SplitRowError (..), SplitSpec (..), splitRow)
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
@@ -46,6 +50,10 @@ usage =
     , "  split-row ROW_ID ACCOUNT NAME=AMOUNT.. split with exact shares; you keep the rest"
     , "  owed                                   what each person currently owes you"
     , "  spending FROM TO                       what you spent per category (your share only)"
+    , "  import-screenshots LAST4 [--taken DATE] FILE...   read screenshots of the app (one scroll, top first)"
+    , "  provisional                            rows read from screenshots that no bank export has confirmed yet"
+    , "  release-provisional ID                 a pending hold that never posted: reverse it"
+    , "  eval-screenshots DIR                   score the model's reading against hand-labelled screenshots"
     , "  opening-balance LAST4 DATE AMOUNT      balance before your first import, e.g. 1234 2025-12-31 1520.35"
     , "  checkpoint LAST4 DATE AMOUNT           a statement's closing balance; prints the reconciliation"
     , "  reconcile                              reconcile every recorded checkpoint (make reconcile)"
@@ -93,6 +101,35 @@ main = do
       (Just rowNumber, shares) -> case traverse parseShare shares of
         Left problem -> die problem
         Right exactShares -> withDatabase (shareRow rowIdText rowNumber accountName (ExactShares exactShares))
+    ("import-screenshots" : last4Text : screenshotArguments) -> do
+      last4 <- maybe (die ("LAST4 must be the last 4 digits of the account number, got " <> show last4Text)) pure (mkLast4 (Text.pack last4Text))
+      (takenArgument, paths) <- either die pure (splitTakenOption screenshotArguments)
+      today <- utctDay <$> getCurrentTime
+      takenOn <- maybe (pure today) parseDay takenArgument
+      files <- mapM (\path -> ScreenshotFile (Text.pack (takeFileName path)) <$> ByteString.readFile path) paths
+      anthropic <- loadAnthropicConfig >>= either (die . Text.unpack) pure
+      extract <- anthropicExtractor anthropic
+      withDatabase $ \pool -> do
+        result <- importScreenshots pool extract anthropic.model last4 takenOn files
+        case result of
+          Right outcome -> Text.putStr (renderImportScreenshotsOutcome outcome)
+          Left problem -> Text.putStr (renderImportScreenshotsError problem <> "\n") >> exitFailure
+    ["provisional"] -> withDatabase $ \pool -> do
+      today <- utctDay <$> getCurrentTime
+      rows <- runSqlPool openProvisionalRows pool
+      Text.putStr (renderOpenProvisional today rows)
+    ["release-provisional", rowIdText] -> case readMaybe rowIdText of
+      Nothing -> die ("ID must be the number shown by scripts/reckon.sh provisional, got " <> show rowIdText)
+      Just rowNumber -> withDatabase $ \pool -> runOrDie pool $ do
+        result <- releaseProvisional (toSqlKey rowNumber)
+        pure $ case result of
+          Right () -> Right ("Released #" <> Text.pack rowIdText <> ": its provisional entry is reversed.")
+          Left NoSuchScreenshotRow -> Left ("There's no screenshot row #" <> Text.pack rowIdText <> ".")
+          Left AlreadyResolved -> Left ("#" <> Text.pack rowIdText <> " has already been confirmed, replaced or released.")
+    ["eval-screenshots", directory] -> do
+      anthropic <- loadAnthropicConfig >>= either (die . Text.unpack) pure
+      extract <- anthropicExtractor anthropic
+      evaluateScreenshots extract directory >>= Text.putStr
     ["owed"] -> withDatabase $ \pool -> do
       today <- utctDay <$> getCurrentTime
       people <- runSqlPool (whoOwesWhat today) pool
@@ -189,6 +226,17 @@ showText = Text.pack . show
 
 parseDay :: String -> IO Day
 parseDay dateText = maybe (die ("A date must look like 2026-01-31, got " <> show dateText)) pure (iso8601ParseM dateText)
+
+-- | @--taken YYYY-MM-DD@ may appear anywhere among the files.
+splitTakenOption :: [String] -> Either String (Maybe String, [FilePath])
+splitTakenOption = go Nothing []
+  where
+    go taken files = \case
+      [] | null files -> Left "Give at least one screenshot file."
+         | otherwise -> Right (taken, reverse files)
+      "--taken" : date : rest -> go (Just date) files rest
+      ["--taken"] -> Left "--taken needs a date, e.g. --taken 2026-02-20"
+      path : rest -> go taken (path : files) rest
 
 -- | @alex=30.00@
 parseShare :: String -> Either String (Text, Cents)

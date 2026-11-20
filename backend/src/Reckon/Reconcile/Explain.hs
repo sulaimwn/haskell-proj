@@ -37,6 +37,9 @@ data ReconciliationInputs = ReconciliationInputs
   -- ^ Imported but not posted, dated on or before 'asOf'.
   , possibleDuplicates :: [EvidenceSummary]
   -- ^ Rows flagged as possible duplicates at import, on or before 'asOf'.
+  , provisionalRows :: [EvidenceSummary]
+  -- ^ Rows read from screenshots and posted provisionally, on or before
+  -- 'asOf'. They are in the ledger but a bank statement doesn't have them.
   , openingBalanceDate :: Maybe Day
   , firstTransactionDate :: Maybe Day
   , coveredRanges :: [(Day, Day)]
@@ -50,6 +53,9 @@ data Finding
     UnpostedRowsExplainGap [EvidenceSummary]
   | -- | One unposted row's amount equals the gap.
     UnpostedRowMatchesGap EvidenceSummary
+  | -- | These rows, read from screenshots, are in the ledger as provisional
+    -- entries and aren't on the statement. They explain the gap exactly.
+    ProvisionalRowsExplainGap [EvidenceSummary]
   | -- | No opening balance is recorded, so the ledger starts from zero
     -- while the bank account didn't. The gap may be the opening balance.
     NoOpeningBalance Cents
@@ -76,7 +82,8 @@ explainReconciliation inputs
     difference = inputs.statementBalance <> negateCents inputs.ledgerBalance
     findings =
       concat
-        [ [UnpostedRowsExplainGap inputs.unpostedRows | not (null inputs.unpostedRows), sumCents (map (.naturalAmount) inputs.unpostedRows) == difference]
+        [ [ProvisionalRowsExplainGap inputs.provisionalRows | not (null inputs.provisionalRows), sumCents (map (.naturalAmount) inputs.provisionalRows) == negateCents difference]
+        , [UnpostedRowsExplainGap inputs.unpostedRows | not (null inputs.unpostedRows), sumCents (map (.naturalAmount) inputs.unpostedRows) == difference]
         , [ UnpostedRowMatchesGap row
           | length inputs.unpostedRows > 1
           , row <- inputs.unpostedRows

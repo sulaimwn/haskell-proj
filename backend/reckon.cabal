@@ -24,6 +24,7 @@ library
   import:          shared
   hs-source-dirs:  src
   exposed-modules:
+    Reckon.Anthropic
     Reckon.Api
     Reckon.Api.JsonOptions
     Reckon.Api.Types
@@ -47,6 +48,14 @@ library
     Reckon.Reconcile
     Reckon.Reconcile.Explain
     Reckon.Report
+    Reckon.Screenshot.Align
+    Reckon.Screenshot.Eval
+    Reckon.Screenshot.Extraction
+    Reckon.Screenshot.Import
+    Reckon.Screenshot.Match
+    Reckon.Screenshot.Resolution
+    Reckon.Screenshot.Score
+    Reckon.Screenshot.Store
     Reckon.Server
     Reckon.Sharing
 
@@ -56,11 +65,18 @@ library
     , aeson
     , aeson-typescript
     , base16-bytestring
+    , base64-bytestring
     , bytestring
+    , case-insensitive
     , cassava
     , containers
     , cryptohash-sha256
+    , directory
     , esqueleto
+    , filepath
+    , http-client
+    , http-client-tls
+    , http-types
     , monad-logger
     , mtl
     , persistent
@@ -112,6 +128,7 @@ test-suite reckon-test
   hs-source-dirs: test
   main-is:        Main.hs
   other-modules:
+    Reckon.AnthropicSpec
     Reckon.Api.TypesSpec
     Reckon.ConfigSpec
     Reckon.Import.DedupeSpec
@@ -124,6 +141,11 @@ test-suite reckon-test
     Reckon.PostingSpec
     Reckon.Reconcile.ExplainSpec
     Reckon.ScenarioSupport
+    Reckon.ScreenshotSpec
+    Reckon.Screenshot.AlignSpec
+    Reckon.Screenshot.ExtractionSpec
+    Reckon.Screenshot.MatchSpec
+    Reckon.Screenshot.ScoreSpec
     Reckon.SharingSpec
     Reckon.ServerSpec
     Reckon.TestSupport
@@ -131,13 +153,17 @@ test-suite reckon-test
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
   build-depends:
     , aeson
+    , base64-bytestring
     , bytestring
     , containers
     , hedgehog
     , hspec
     , hspec-hedgehog
     , hspec-wai
+    , http-types
     , persistent
     , reckon
     , text
     , time
+    , wai
+    , warp

@@ -1,0 +1,12 @@
+{
+  "accountLabel": "Chequing 123456789",
+  "transactions": [
+    {"dateText": "Smarch 3", "description": "COFFEE CO", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "MYSTERY", "amountText": "$9.99", "direction": "unknown", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "REFUND", "amountText": "-$9.99", "direction": "credit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "FREE", "amountText": "$0.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "ACCT 4500123456789876 PAYMENT", "amountText": "-$5.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "GARBLED", "amountText": "twelve dollars", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 18", "description": "  ", "amountText": "-$1.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false}
+  ]
+}

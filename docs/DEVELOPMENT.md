@@ -288,6 +288,7 @@ Run `make` with no arguments to see them all.
 | `make import file=private/export.csv` | Import an RBC CSV export into the dev database |
 | `make post` | Post imported rows to the journal (rules, transfers, cancellations); lists rows left for review |
 | `make reconcile` | Compare the ledger with every recorded statement balance, and explain any gap |
+| `make provisional` | Rows read from screenshots that no bank export has confirmed yet |
 | `make owed` | What each person you share expenses with owes you |
 | `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `recategorize`, `add-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
 | `make db-psql` | psql shell on the dev database |
@@ -296,6 +297,59 @@ Run `make` with no arguments to see them all.
 | `make hooks` | (Re)install the pre-commit hook |
 
 Run a subset of backend tests: `scripts/test.sh --match "GET /api/health"`.
+
+## Reading screenshots
+
+For the days a bank export doesn't cover yet (pending transactions, recent purchases). A
+screenshot is read by Claude, so it's evidence of lower quality than a CSV: what it reads is posted
+as a **provisional** entry, and the bank's CSV confirms or replaces it later.
+
+1. **Put your key in `.env`** (gitignored): `ANTHROPIC_API_KEY=sk-ant-...`. Optionally
+   `ANTHROPIC_MODEL=...` (default `claude-opus-5-5`). The key is only ever used by the backend,
+   and screenshots are sent to Anthropic's API (see docs/PRIVACY.md: crop anything you don't want sent).
+2. **Take screenshots of one scroll of the transactions list in the RBC app**, so that each one
+   shares a few rows with the one before. Save them in `private/screenshots/`.
+3. **Read them**, top of the list first, naming the account by its last 4 digits (it must
+   already have had a CSV imported):
+
+   ```bash
+   scripts/reckon.sh import-screenshots 1234 private/screenshots/top.png private/screenshots/next.png
+   scripts/reckon.sh import-screenshots 1234 --taken 2026-02-20 private/screenshots/*.png   # a screenshot from another day
+   ```
+
+   `--taken` is the day the screenshots were taken (default today): "Today", "Yesterday" and dates
+   without a year ("Feb 14") are read against it. The command prints how many rows were read, how
+   many were posted provisionally, and **warnings**: screenshots that share no rows (transactions
+   between them may be missing), an ambiguous overlap, or the wrong order.
+4. **See what's waiting on the bank:**
+
+   ```bash
+   scripts/reckon.sh provisional
+   ```
+
+5. **Import the bank's CSV later and run `make post`.** Each provisional row the CSV confirms is
+   reversed and replaced by the CSV's own row, and `make post` says how many.
+6. **A pending hold that never posted** (a gas-station hold that was released): `scripts/reckon.sh
+   release-provisional ID` (the `#ID` from `provisional`). A hold that posted for a different amount
+   is replaced automatically by the CSV row, or by a later screenshot showing it posted.
+
+If the reading can't be used (a row with an unreadable date, a direction the model couldn't tell,
+anything that looks like an account number) the whole thing is rejected, listing every problem, and
+**nothing is stored**. Just run it again, or retake the screenshot.
+
+**Checking how well it reads.** Put a few screenshots and hand-written labels in `private/eval/`:
+`name.png` and `name.json`, where the label is
+
+```json
+{ "takenOn": "2026-02-20", "extraction": { "accountLabel": "Chequing", "transactions": [ ... ] } }
+```
+
+(`extraction` has the same shape the model returns, so a label can start as its own answer,
+corrected by hand: see `fixtures/screenshots/scroll-1.json`.) Then
+`scripts/reckon.sh eval-screenshots private/eval` prints, per screenshot and overall, how many
+rows were found, missed and invented, and how many descriptions, sections and balances were right.
+Try a cheaper model with `ANTHROPIC_MODEL=... scripts/reckon.sh eval-screenshots private/eval`
+and compare.
 
 ## Environment variables
 
@@ -307,7 +361,9 @@ Defined in `.env` (copied from `.env.example`). The scripts export them.
 | `TEST_DATABASE_URL` | backend tests | same server, database `reckon_test` |
 | `RECKON_PORT` | backend, Vite proxy | `8080` |
 | `RECKON_DB_PORT` | docker-compose | `5433` |
-| `ANTHROPIC_API_KEY` | backend (Phase 5) | unset |
+| `ANTHROPIC_API_KEY` | `import-screenshots` and `eval-screenshots` (the backend only; never the frontend, never logged) | unset (screenshots can't be read without it) |
+| `ANTHROPIC_MODEL` | the same | `claude-opus-5-5` |
+| `ANTHROPIC_BASE_URL` | the same. Only changed to point at a test stub. | `https://api.anthropic.com` |
 
 ## Common workflows
 
@@ -339,5 +395,10 @@ merged; add a new one.
 | `opening-balance` says it must be before your first transaction | Use a statement balance from a date before the earliest imported row, or the first transaction would be counted twice. |
 | `split-row` says there's no one called alex | Add them first: `scripts/reckon.sh add-person alex "THEIR NAME ON E-TRANSFERS"`. |
 | `split-row` / `recategorize` says a row is one leg of a transfer | By design. Transfers and cancelled pairs are two entries through `asset:clearing` that must stay together. |
+| `ANTHROPIC_API_KEY is not set` | Add it to `.env` (see "Reading screenshots"). The key is read from the environment, never from the repo. |
+| `import-screenshots` says the model's reading wasn't usable | By design: nothing was stored. The message lists each problem with its row. Run it again (readings vary), or retake the screenshot. |
+| `The Anthropic API returned 401` / `403` | The key is wrong or lacks access to the model. Try another `ANTHROPIC_MODEL`. |
+| `The Anthropic API returned 429` / `529` | Rate limited or overloaded. It already retried twice, so wait and run it again. |
+| `WARNING: ... share no rows` | The screenshots don't overlap, so transactions between them may be missing. Retake them with a few rows in common. |
 | `No imported bank account ends in 1234` | Import an export for that account first, and use its last 4 digits. |
 | `reckon_test` database doesn't exist | It's created the first time the volume is initialized. If your volume predates that: `make db-psql`, then `CREATE DATABASE reckon_test;` |

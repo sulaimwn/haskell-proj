@@ -19,6 +19,7 @@ module Reckon.Posting
   , addCategorizationRule
   , RuleError (..)
   , wellKnownAccounts
+  , loadRules
   , currentEntryForRow
   ) where
 
@@ -41,6 +42,7 @@ import Reckon.Ledger.Entry (EntryError, EntryLine (..), NewJournalEntry, mkBalan
 import Reckon.Money (Cents (..), negateCents, renderCents)
 import Reckon.People (loadKnownPeople)
 import Reckon.Posting.Classify
+import Reckon.Screenshot.Store (confirmProvisionalRows)
 
 -- | The accounts the planner routes to, created on first use.
 wellKnownAccounts :: (MonadIO m) => SqlPersistT m (WellKnownAccounts LedgerAccountId)
@@ -60,12 +62,18 @@ data PostingSummary = PostingSummary
   , reposted :: Int
   -- ^ Rows posted earlier on a guess, re-posted now that their other half
   -- arrived.
+  , confirmedProvisional :: Int
+  -- ^ Rows read from screenshots and posted provisionally, now confirmed by
+  -- the bank's own row (the provisional entry was reversed).
   , leftForReview :: [(RawBankRowId, Day, Text, Cents, ReviewReason RawBankRowId)]
   }
   deriving stock (Show, Eq)
 
 postPendingRows :: (MonadIO m) => SqlPersistT m PostingSummary
 postPendingRows = do
+  -- Rows read from screenshots give way to the bank's own rows first: the
+  -- provisional entry is reversed, then the bank's row is posted below.
+  confirmed <- confirmProvisionalRows
   wellKnown <- wellKnownAccounts
   rules <- loadRules
   people <- loadKnownPeople
@@ -96,6 +104,7 @@ postPendingRows = do
       , untrackedCardPayments = count (isClassification (== UntrackedCardPayment))
       , uncategorized = count (isClassification (== Uncategorized))
       , reposted = count (.replacesExistingEntry)
+      , confirmedProvisional = confirmed
       , leftForReview =
           [ (row.rowId, row.transactionDate, entryDescription row, row.amount, reason)
           | (row, reason) <- plan.leftForReview
@@ -333,6 +342,7 @@ renderPostingSummary summary =
   Text.unlines $
     postedLines
       <> ["  " <> showText summary.reposted <> " earlier row(s) re-posted after their other half arrived" | summary.reposted > 0]
+      <> ["  " <> showText summary.confirmedProvisional <> " provisional entr(ies) read from screenshots confirmed by the bank's rows" | summary.confirmedProvisional > 0]
       <> case summary.leftForReview of
         [] -> []
         items ->
@@ -343,7 +353,7 @@ renderPostingSummary summary =
               <> ["Decide these yourself with: scripts/reckon.sh post-row ROW_ID ACCOUNT  (e.g. asset:clearing for a transfer leg, receivable:NAME for a repayment)"]
   where
     postedLines
-      | total == 0 = ["Nothing new to post."]
+      | total == 0 && summary.confirmedProvisional == 0 = ["Nothing new to post."]
       | otherwise =
           [ "Posted " <> showText total <> " row(s) to the journal:"
           , "  " <> showText summary.categorizedByRule <> " categorized by a rule"

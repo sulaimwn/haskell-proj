@@ -95,7 +95,8 @@ make import file=private/export.csv   # import a real RBC CSV
 make post       # post imported rows to the journal
 make reconcile  # compare the ledger with every recorded statement balance
 make owed       # what friends owe you
-scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, add-person, split-row, spending, opening-balance, checkpoint)
+make provisional  # rows read from screenshots that no bank CSV has confirmed yet
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -164,6 +165,21 @@ docs/        see the table above
 - Shared test helpers (`Scenario`, `importCsv`, `entryLinesForRow`, ...) live in
   `test/Reckon/ScenarioSupport.hs`. `postPendingRows` posts every unposted
   row, so a test must only assert on its own scenario's rows.
+- **Never call the real Claude API from a test.** `Reckon.Anthropic.Extractor` is a function
+  (image -> the model's reply text): tests pass fakes (`scripted` in ScreenshotSpec), recorded
+  fake replies from `fixtures/screenshots`, or the in-process stub in AnthropicSpec. The key is an
+  `ApiKey` whose `Show` is redacted: keep it that way, and build errors from the response, not the
+  request.
+- Everything the model says is untrusted until `Screenshot.Extraction.parseExtraction` accepts it.
+  Do arithmetic, years and signs in code, not in the prompt. A new field means changing the schema,
+  the prompt, `parseRawRow`, the fixtures and the spec together.
+- A screenshot row is "open" until it has a `provisional_resolutions` row. Resolve one only by
+  reversing its entry dated like the original (`reverseEntryOf`), never by editing. The
+  reconciliation identity includes open provisional rows (DECISIONS D059).
+- `-Wpartial-fields` rejects record fields on only some constructors of a sum type. Put the record
+  in its own type (`Imported ImportedScreenshots`).
+- GHC 9.10's Prelude exports `foldl'`: importing it from `Data.List` is a redundant-import error
+  under `-Werror`.
 - Statement balances and opening balances are entered in the **natural**
   sign (money in chequing, money owed on a card). Convert with
   `naturalBalance` at the edges; the ledger stores raw debits (+) and

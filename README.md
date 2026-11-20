@@ -26,8 +26,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | 2 | RBC CSV import with idempotent, overlap-safe dedupe | ✅ done |
 | 3 | Evidence → entries, transfer pairing, statement reconciliation | ✅ done |
 | 4 | Shared expenses and receivables | ✅ done |
-| 5 | Screenshot ingestion with Claude | next |
-| 6 | Frontend | |
+| 5 | Screenshot ingestion with Claude | ✅ done |
+| 6 | Frontend | next |
 | 7 | Scheduled jobs and a categorization rule language | |
 | 8 | Demo dataset and write-up | |
 
@@ -46,6 +46,7 @@ make import file=private/rbc-export.csv   # import a real RBC CSV export
 make post                                 # turn imported rows into journal entries
 scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43   # check against a statement
 scripts/reckon.sh split-row 42 expense:food equal alex sam   # share a dinner; `owed` shows who owes what
+scripts/reckon.sh import-screenshots 1234 private/screenshots/*.png   # read app screenshots with Claude (needs ANTHROPIC_API_KEY)
 ```
 
 Open <http://localhost:5173>. The first build compiles all Haskell

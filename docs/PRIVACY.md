@@ -17,8 +17,15 @@ are non-negotiable.
 5. **Friends' names are personal data too.** The `people` table (names and
    the text their e-Transfers contain) lives only in your local database.
    Fixtures use obviously fake names (ALEX EXAMPLE).
-6. **Screenshots are sent to Anthropic's API** (from Phase 5). Crop out
-   anything you don't want to send before uploading.
+6. **Screenshots are sent to Anthropic's API** by `import-screenshots` and
+   `eval-screenshots`, using your own key, from the backend only. Crop out
+   anything you don't want sent before reading them. Keep screenshots, and the
+   hand-written labels for the evaluation, in `private/` (e.g. `private/screenshots`,
+   `private/eval`): the commit guard blocks images anywhere else.
+7. **Only what the model read is kept, not the image.** The database stores the
+   image's SHA-256, its file name, and the model's *validated* reply. The model
+   is told never to return an account number, and the reply is rejected if any
+   description or the account label contains nine or more digits in a row.
 
 ## How the rules are enforced
 
@@ -28,6 +35,7 @@ are non-negotiable.
 | Pre-commit hook (`.githooks/pre-commit`) | Blocks a commit that stages anything under `private/`, any `.env` file, or any data-shaped file (`.csv`, `.ofx`, `.qfx`, `.pdf`, `.png`, `.jpg`, ...) outside the allowed folders (`fixtures/`, `docs/images/`, `frontend/public/`, `frontend/src/assets/`). `make dev` and `make hooks` install it. |
 | CI (`privacy-guard` job) | The same check over every tracked file, so a commit made without the hook still fails CI. |
 | Code | The RBC parser keeps only the last 4 digits (`Last4` can't hold more), `bank_accounts.last4` has a 4-digit CHECK, and a test scans every stored column after an import to prove the full number appears nowhere. |
+| Code (Phase 5) | `ApiKey` has a hand-written `Show` that prints `<redacted>`; the request header is marked redacted; errors are built from the API's response, never from the request; a test asserts the key appears in no error or `show` output. Tests never call the real API: they use scripted fakes, hand-written fixtures (`fixtures/screenshots`, no real screenshot), and an in-process stub server. `parseExtraction` rejects a reply with an account-number-shaped digit run before anything is stored. |
 | Workflow | `make import` warns if the file isn't under `private/`. `make post`, `make reconcile`, `owed`, `spending` and `checkpoint` print real descriptions, names and amounts to your terminal: when asking for help, share the kind of problem (e.g. "3 rows left for review, ambiguous transfer") or the parser's line-numbered errors, not the output itself. |
 
 The hook runs **before** the commit, which matters: once something reaches a

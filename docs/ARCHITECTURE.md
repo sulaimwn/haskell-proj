@@ -55,8 +55,17 @@ backend/
     People.hs             DB: people I share costs with, their receivable accounts, who owes what
     Sharing.hs            DB: splitRow (replace a row's entry with a split one)
     Report.hs             DB: spending by expense account (my share only)
+    Anthropic.hs          the Claude Messages API client (raw HTTP): request builder, response parser, retries, redacted key
+    Screenshot/Extraction.hs  pure: the schema and prompt sent to the model; strict validation of its reply; dates, years and amounts
+    Screenshot/Align.hs   pure: joining overlapping screenshots of one scroll
+    Screenshot/Match.hs   pure: which provisional row is which bank row (or later screenshot row)
+    Screenshot/Score.hs   pure: scoring an extraction against a hand-labelled answer
+    Screenshot/Store.hs   DB: store rows, post provisional entries, resolve them (confirm, supersede, release)
+    Screenshot/Import.hs  orchestration: files -> media type -> hash -> model -> validate -> store, in one transaction
+    Screenshot/Eval.hs    reads private/eval and prints scores
+    Screenshot/Resolution.hs  how a provisional row stopped being provisional (stored as text)
   app/Main.hs             reckon-server executable
-  cli/Main.hs             reckon-cli executable: import, post, rules, people, splits, owed, spending, opening balance, checkpoints, reconcile
+  cli/Main.hs             reckon-cli executable: import, post, rules, people, splits, owed, spending, screenshots, opening balance, checkpoints, reconcile
   codegen/Main.hs         reckon-codegen executable (writes generated.ts)
   test/                   hspec test suite
 frontend/
@@ -344,6 +353,58 @@ repayment. It is left for review, not posted, and `make post` prints the
 their receivable (an asset) and transfers are in clearing, so neither can
 count as spending.
 
+## Screenshots (Phase 5)
+
+Migration: `db/migrations/20260926090000_create_screenshots.sql`.
+
+A screenshot of the RBC app is evidence of lower quality than a CSV, so it
+lives in its own tables, is posted as a **provisional** entry, and gives way
+when the bank's CSV arrives.
+
+```
+scripts/reckon.sh import-screenshots 1234 --taken 2026-02-20 top.png next.png   (one scroll, top first)
+  1. no network: account exists? each file an image (by its first bytes)?
+     already read (SHA-256)?  → those are skipped
+  2. for each new image: Anthropic Messages API, reply constrained to a JSON Schema
+     parseExtraction validates strictly; any problem → nothing stored, nothing posted
+  3. alignScreenshots joins the overlapping screenshots (warns on ambiguity / no overlap)
+  4. ONE transaction:
+       insert screenshot_uploads, screenshot_rows (identity: account, date, fingerprint, occurrence)
+       rows the bank's CSV already has              → resolved "already_in_csv", nothing posted
+       older pending holds that these posted rows replace → hold reversed, "superseded_by_screenshot"
+       everything else read with confidence         → "(provisional) ..." entry + screenshot_entry_evidence
+make post (later, after the bank's CSV is imported)
+  confirmProvisionalRows: planMatches provisional rows vs the CSV rows → each match:
+       provisional entry reversed (dated like the original), resolved "confirmed_by_csv"
+       then the CSV row is posted the normal way
+```
+
+**What the model does and doesn't do** (D055). It copies the date, description and amount as
+displayed, a direction, pending or posted, a running balance if shown, whether it was unsure, and
+whether the row is cut off. Dates become real dates, the year is worked out, amounts become
+exact cents, and anything off is refused, all in `Reckon.Screenshot.Extraction`, which is pure.
+
+**Tables:**
+
+| Table | Holds | Mutable? |
+|---|---|---|
+| `screenshot_uploads` | one per image: SHA-256 (UNIQUE), file name, account, day taken, model, the validated reply | append-only |
+| `screenshot_rows` | each transaction read, after joining: date, description, amount, running balance, pending, uncertain, fingerprint, occurrence | append-only |
+| `screenshot_entry_evidence` | which provisional entry was posted from which row | append-only |
+| `provisional_resolutions` | how a row stopped being provisional: `confirmed_by_csv`, `already_in_csv`, `superseded_by_screenshot`, `released` (a CHECK ties each kind to the columns it needs; a CSV row can be claimed once) | append-only |
+
+A screenshot row is **open** until it has a resolution. `scripts/reckon.sh provisional` lists the open ones.
+
+**The reconciliation identity, extended** (D059): ledger balance = opening balance + posted CSV
+rows + open provisional rows. A statement that disagrees by exactly the open provisional rows is
+explained as such.
+
+Worked example (`fixtures/screenshots`, taken 2026-02-20): `scroll-1` and `scroll-2` join into 8
+rows, keeping both $4.50 coffees. Seven are posted provisionally (a $100.00 pending gas hold,
+payroll, two coffees, grocery, hydro, an e-Transfer). The rent row the model wasn't sure of is kept
+and not posted. When the bank's CSV arrives with the hold posted for $43.20, `make post` matches all
+eight, reverses the seven entries, and posts the CSV rows: the ledger is exactly the CSV's.
+
 ## Invariants
 
 This section grows every phase. Each invariant lists how it is enforced.
@@ -374,6 +435,14 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Reported spending counts only my share | spending sums `expense` accounts only (D052); test with a split dinner | Phase 4 |
 | Re-posting a row never changes the bank account's balance on any date | reversal dated like the original (D051); test over every date of the month | Phase 4 |
 | One leg of a transfer or cancelled pair can't be moved on its own | `repostRow` refuses an entry touching `asset:clearing`; tests | Phase 4 |
+| Nothing the model says is trusted until validated: the year, exact cents and signs are worked out in code, and a reply with any bad row, extra field, or digit run that looks like an account number stores nothing | `parseExtraction` (pure) + all-or-nothing import transaction + tests over fake replies | Phase 5 |
+| The API key is never printed, logged, stored, or sent anywhere but the API's header | `ApiKey` has a redacted `Show`; the request header is marked redacted; errors are built from the response, not the request; test asserts the key is in no error text | Phase 5 |
+| Tests never call the real API | `Extractor` is a function; tests pass fakes, recorded replies in `fixtures/screenshots`, or an in-process stub server | Phase 5 |
+| The same image is never read twice, and the same rows from overlapping screenshots are stored once, while genuinely identical rows are kept | SHA-256 UNIQUE; `alignScreenshots` (property over distinct rows, examples with identical rows); the (account, date, fingerprint, occurrence) key | Phase 5 |
+| A provisional entry is always reversed, dated like the original, when it is resolved, so balances on every date are never double-counted | `reverseEntryOf` in confirm / supersede / release; tests check balances on every date after confirming | Phase 5 |
+| A provisional row is resolved at most once, and a bank row confirms at most one provisional row | `provisional_resolutions` primary key + `UNIQUE (raw_bank_row_id)` + CHECK per kind; raw-SQL test | Phase 5 |
+| A row is matched to a bank row only when unambiguous | `planMatches`: each is the other's only candidate, with identical rows matched as a group; property: matches are one to one | Phase 5 |
+| Screenshot evidence is never modified | append-only triggers + raw-SQL tests | Phase 5 |
 | Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI

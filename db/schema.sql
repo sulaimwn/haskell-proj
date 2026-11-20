@@ -431,6 +431,21 @@ ALTER TABLE public.people ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
+-- Name: provisional_resolutions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provisional_resolutions (
+    screenshot_row_id bigint NOT NULL,
+    kind text NOT NULL,
+    raw_bank_row_id bigint,
+    superseded_by_screenshot_row_id bigint,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT provisional_resolutions_check CHECK ((((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text])) AND (raw_bank_row_id IS NOT NULL) AND (superseded_by_screenshot_row_id IS NULL)) OR ((kind = 'superseded_by_screenshot'::text) AND (superseded_by_screenshot_row_id IS NOT NULL) AND (raw_bank_row_id IS NULL)) OR ((kind = 'released'::text) AND (raw_bank_row_id IS NULL) AND (superseded_by_screenshot_row_id IS NULL)))),
+    CONSTRAINT provisional_resolutions_kind_check CHECK ((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text, 'superseded_by_screenshot'::text, 'released'::text])))
+);
+
+
+--
 -- Name: raw_bank_rows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -469,6 +484,88 @@ ALTER TABLE public.raw_bank_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 CREATE TABLE public.schema_migrations (
     version character varying NOT NULL
+);
+
+
+--
+-- Name: screenshot_entry_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_entry_evidence (
+    entry_id bigint NOT NULL,
+    screenshot_row_id bigint NOT NULL
+);
+
+
+--
+-- Name: screenshot_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_rows (
+    id bigint NOT NULL,
+    upload_id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    transaction_date date NOT NULL,
+    description text NOT NULL,
+    amount_cents bigint NOT NULL,
+    running_balance_cents bigint,
+    is_pending boolean NOT NULL,
+    uncertain boolean NOT NULL,
+    fingerprint text NOT NULL,
+    occurrence integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT screenshot_rows_amount_cents_check CHECK ((amount_cents <> 0)),
+    CONSTRAINT screenshot_rows_description_check CHECK ((description <> ''::text)),
+    CONSTRAINT screenshot_rows_occurrence_check CHECK ((occurrence >= 1))
+);
+
+
+--
+-- Name: screenshot_rows_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.screenshot_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.screenshot_rows_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: screenshot_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_uploads (
+    id bigint NOT NULL,
+    file_sha256 text NOT NULL,
+    file_name text NOT NULL,
+    bank_account_id bigint NOT NULL,
+    taken_on date NOT NULL,
+    model_id text NOT NULL,
+    account_label text NOT NULL,
+    extraction_json text NOT NULL,
+    partial_rows_dropped integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT screenshot_uploads_file_sha256_check CHECK ((file_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT screenshot_uploads_model_id_check CHECK ((model_id <> ''::text)),
+    CONSTRAINT screenshot_uploads_partial_rows_dropped_check CHECK ((partial_rows_dropped >= 0))
+);
+
+
+--
+-- Name: screenshot_uploads_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.screenshot_uploads ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.screenshot_uploads_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -660,6 +757,30 @@ ALTER TABLE ONLY public.people
 
 
 --
+-- Name: provisional_resolutions provisional_resolutions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_pkey PRIMARY KEY (screenshot_row_id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_raw_bank_row_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_raw_bank_row_id_key UNIQUE (raw_bank_row_id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_superseded_by_screenshot_row_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_superseded_by_screenshot_row_id_key UNIQUE (superseded_by_screenshot_row_id);
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_bank_account_id_transaction_date_fingerprint__key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -681,6 +802,46 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 ALTER TABLE ONLY public.schema_migrations
     ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_pkey PRIMARY KEY (entry_id, screenshot_row_id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_bank_account_id_transaction_date_fingerprin_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_bank_account_id_transaction_date_fingerprin_key UNIQUE (bank_account_id, transaction_date, fingerprint, occurrence);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_file_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_file_sha256_key UNIQUE (file_sha256);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_pkey PRIMARY KEY (id);
 
 
 --
@@ -739,6 +900,20 @@ CREATE INDEX opening_balances_bank_account_id_idx ON public.opening_balances USI
 --
 
 CREATE INDEX raw_bank_rows_first_seen_batch_id_idx ON public.raw_bank_rows USING btree (first_seen_batch_id);
+
+
+--
+-- Name: screenshot_entry_evidence_screenshot_row_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screenshot_entry_evidence_screenshot_row_id_idx ON public.screenshot_entry_evidence USING btree (screenshot_row_id);
+
+
+--
+-- Name: screenshot_rows_upload_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screenshot_rows_upload_id_idx ON public.screenshot_rows USING btree (upload_id);
 
 
 --
@@ -826,6 +1001,13 @@ CREATE TRIGGER opening_balances_are_append_only BEFORE DELETE OR UPDATE ON publi
 
 
 --
+-- Name: provisional_resolutions provisional_resolutions_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER provisional_resolutions_are_append_only BEFORE DELETE OR UPDATE ON public.provisional_resolutions FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_are_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -837,6 +1019,27 @@ CREATE TRIGGER raw_bank_rows_are_append_only BEFORE DELETE OR UPDATE ON public.r
 --
 
 CREATE TRIGGER raw_bank_rows_cannot_be_truncated BEFORE TRUNCATE ON public.raw_bank_rows FOR EACH STATEMENT EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_is_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_entry_evidence_is_append_only BEFORE DELETE OR UPDATE ON public.screenshot_entry_evidence FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
+-- Name: screenshot_rows screenshot_rows_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_rows_are_append_only BEFORE DELETE OR UPDATE ON public.screenshot_rows FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_uploads_are_append_only BEFORE DELETE OR UPDATE ON public.screenshot_uploads FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
 
 
 --
@@ -975,6 +1178,30 @@ ALTER TABLE ONLY public.people
 
 
 --
+-- Name: provisional_resolutions provisional_resolutions_raw_bank_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_raw_bank_row_id_fkey FOREIGN KEY (raw_bank_row_id) REFERENCES public.raw_bank_rows(id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_screenshot_row_id_fkey FOREIGN KEY (screenshot_row_id) REFERENCES public.screenshot_rows(id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_superseded_by_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_superseded_by_screenshot_row_id_fkey FOREIGN KEY (superseded_by_screenshot_row_id) REFERENCES public.screenshot_rows(id);
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -988,6 +1215,46 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 ALTER TABLE ONLY public.raw_bank_rows
     ADD CONSTRAINT raw_bank_rows_first_seen_batch_id_fkey FOREIGN KEY (first_seen_batch_id) REFERENCES public.import_batches(id);
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_screenshot_row_id_fkey FOREIGN KEY (screenshot_row_id) REFERENCES public.screenshot_rows(id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_upload_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_upload_id_fkey FOREIGN KEY (upload_id) REFERENCES public.screenshot_uploads(id);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
 
 
 --
@@ -1013,4 +1280,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260922210000'),
     ('20260923120000'),
     ('20260924090000'),
-    ('20260925090000');
+    ('20260925090000'),
+    ('20260926090000');

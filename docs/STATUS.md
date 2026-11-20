@@ -3,15 +3,16 @@
 **The handoff doc.** If you're picking this project up, read this first,
 then [CLAUDE.md](../CLAUDE.md). Updated in every PR.
 
-_Last updated: 2026-11-20, end of Phase 4._
+_Last updated: 2026-11-20, end of Phase 5._
 
 ## Where we are
 
-**Phase 4 (shared expenses and receivables) is complete.** It is stacked on
-Phase 3, which is still awaiting the owner's review ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4)):
-the owner asked for work to continue without waiting, so Phase 4's commits
-are on the same branch and in the same PR. Nothing has been merged by
-Claude. Phase 5 (screenshot ingestion with Claude) is next.
+**Phase 5 (screenshot ingestion with Claude) is complete**, except that it
+has never talked to the real API (see "Unverified" below). Phases 3, 4 and 5
+are stacked on one branch and in one PR, because the owner asked for work to
+continue without waiting for review ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4),
+one commit per phase, so they can be reviewed separately). Nothing has been
+merged by Claude. Phase 6 (the frontend) is next.
 
 | Phase | Status |
 |---|---|
@@ -20,8 +21,9 @@ Claude. Phase 5 (screenshot ingestion with Claude) is next.
 | 2: RBC CSV import | ✅ merged ([PR #3](https://github.com/sulaimwn/haskell-proj/pull/3)) |
 | 3: Evidence → entries, transfers, reconciliation | ✅ done, in review ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4)) |
 | 4: Shared expenses and receivables | ✅ done, same PR (stacked on 3) |
-| 5: Screenshot ingestion with Claude | ⏭ next |
-| 6–8 | not started |
+| 5: Screenshot ingestion with Claude | ✅ done, same PR (stacked on 4) |
+| 6: Frontend | ⏭ next |
+| 7–8 | not started |
 
 ## What works today
 
@@ -37,6 +39,33 @@ scripts/reckon.sh opening-balance 1234 2026-01-31 1000.00
 scripts/reckon.sh checkpoint 1234 2026-02-28 1552.43    # prints the reconciliation
 make reconcile                                          # re-check every checkpoint
 ```
+
+**Screenshots (Phase 5):**
+
+```bash
+# in .env: ANTHROPIC_API_KEY=sk-ant-...   (and optionally ANTHROPIC_MODEL)
+scripts/reckon.sh import-screenshots 1234 private/screenshots/top.png private/screenshots/next.png
+scripts/reckon.sh provisional                    # what's waiting on the bank's CSV (make provisional)
+make post                                        # after importing the CSV: confirms and replaces them
+scripts/reckon.sh release-provisional 12         # a pending hold that never posted
+scripts/reckon.sh eval-screenshots private/eval  # score the model against labelled screenshots
+```
+
+- A screenshot is read by Claude through a small HTTP client (`Reckon.Anthropic`). The model only
+  **transcribes** (date, description and amount as displayed, direction, pending or posted); the
+  year, exact cents and signs are worked out in code, and **anything off rejects the whole reading**
+  and stores nothing (D054, D055).
+- Overlapping screenshots of one scroll are **joined by their overlap**, keeping genuinely identical
+  rows (two coffees), and warn on ambiguity, no overlap, or the wrong order (D056).
+- What's read becomes **provisional entries** in the ledger. The bank's CSV later **confirms** them
+  (the provisional entry is reversed, dated like the original, and the CSV row is posted). Rows the
+  CSV already had are never posted; a **pending hold** that posted for a different amount is replaced
+  by its posted version; a released hold is reversed by hand (D057, D058).
+- Rows the model marked uncertain are kept but **never posted**. Rows cut off at a screen edge are
+  skipped. The reconciliation report names open provisional rows as the reason a statement is behind
+  (D059).
+- The same image is never read twice (SHA-256), and nothing but the validated reply is stored: not
+  the image.
 
 **Shared expenses (Phase 4):**
 
@@ -98,8 +127,8 @@ database; reversals; balances as of a date.
 **Skeleton (Phase 0):** `make dev`, `/api/health` with a live badge,
 TypeScript types generated from Haskell, the privacy guard, CI.
 
-Tests: 122 examples (hspec + hedgehog properties, including model-based and
-database properties). `make check` passes.
+Tests: 199 examples (hspec + hedgehog properties, including model-based and
+database properties; none call the real API). `make check` passes.
 
 There's no UI for any of this yet. That's Phase 6.
 
@@ -124,13 +153,38 @@ option was taken. All are easy to change now, harder later. **D038**:
    be silent.
 4. **Odd cents in an equal split go to the owner first** (D049).
 
-Also a scope change, **D045**: pending transactions and debit holds moved
-to Phase 5, because CSV exports only contain posted transactions. Pending
-rows only appear once screenshots are imported.
+5. **The default model is `claude-opus-5-5`** (D054), chosen without the
+   owner. It's the most capable but also the costliest way to read a
+   screenshot. Set `ANTHROPIC_MODEL` to try another, and use
+   `eval-screenshots` to compare them on your own screenshots.
+6. **Screenshots are read from the command line**, not uploaded from a web
+   page (D060): the upload page comes with the frontend in Phase 6. The
+   account is named by its last 4 digits and must already have had a CSV imported.
+
+Pending transactions and debit holds (scope change **D045**) were built in
+Phase 5, as described above.
 
 ## Unverified against real data
 
-Nothing here has been run on a real RBC export yet. When the owner does:
+**Phase 5 has never talked to the real Anthropic API or seen a real RBC
+screenshot.** Everything is tested against fakes: scripted replies,
+recorded fake JSON, and a local stub server (and the CLI was run end to end
+against that stub). So, before relying on it:
+
+1. **Run it once on real screenshots** and look at the result. A single
+   `import-screenshots` and `provisional` will show whether the prompt and
+   schema work on the real app's screens.
+2. **Run `eval-screenshots`** on a handful of labelled screenshots in
+   `private/eval` for the first real accuracy numbers. Try more than one model.
+3. Things that are assumptions until then: how the app shows dates ("Feb 14",
+   "Today"), amounts and pending sections; that no description legitimately
+   has nine digits in a row (such a reading is rejected as a possible account
+   number); the matching windows (3 days, 7 for a hold) and "a word in
+   common" rule (D057); and that the API's request and response shapes in
+   `Reckon.Anthropic` are exactly as the current API expects (they follow its
+   documentation, and a failure would show as a clear `ApiError`).
+
+Nothing else here has been run on a real RBC export yet either. When the owner does:
 
 - **The CSV layout** (Phase 2): Account Type, Account Number, Transaction
   Date, Cheque Number, Description 1, Description 2, CAD$, USD$, with
@@ -147,26 +201,24 @@ Nothing here has been run on a real RBC export yet. When the owner does:
   MASTERCARD, AMEX, AMERICAN EXPRESS or CREDIT CARD. Real descriptions may
   differ. `make post`'s summary shows what was recognized.
 
-## What's next: Phase 5 (screenshot ingestion with Claude)
+## What's next: Phase 6 (frontend)
 
-From [SPEC.md](SPEC.md#phase-5-screenshot-ingestion-with-claude): upload
-screenshots of the RBC app's transaction list; the backend sends each image
-to the Anthropic Messages API with schema-constrained JSON output; the
-result is validated strictly in Haskell, the year is inferred in code,
-overlapping screenshots are deduplicated by alignment, and the rows become
-low-confidence `raw_bank_rows` posted as **provisional** entries, later
-confirmed by a CSV. Also gets pending transactions and debit holds (moved
-here from Phase 3, D045).
+From [SPEC.md](SPEC.md#phase-6-frontend): accounts overview (balances, reconciliation status),
+an import page (CSV and screenshots), the review queue, the transaction list (filter, split with
+friends), spending by category per month (excluding transfers and friends' shares), and
+receivables. Everything the CLI does today becomes an HTTP endpoint with generated TypeScript
+types (`Reckon.Api.Types`) and a page.
 
-Needs from the owner at the start of Phase 5:
-- An `ANTHROPIC_API_KEY` in `.env` for real runs. Tests never call the API.
-- Which model ID to default to (set by an environment variable).
-- A few real screenshots in `private/` for the evaluation script (they are
-  never committed).
+Things to decide at the start of Phase 6:
+- Screenshot upload: files go to the backend over HTTP (multipart), which calls the API. The key
+  never reaches the browser.
+- The review queue is where import flags (D031), ambiguous pairings (D041), possible repayments
+  (D050), uncertain screenshot rows and open provisional rows all land today as CLI text.
+- Whether to add a login before anything is deployed (Phase 8). It's single-user and local so far.
 
 ## Open questions for the owner
 
-1. The D038 and D050 defaults above (confirm or override).
+1. The D038, D050 and D054 defaults above (confirm or override).
 2. Production deployment target for the Phase 8 demo (Fly.io, Render, a VPS,
    or local-only). Doesn't block anything until Phase 8.
 
@@ -181,6 +233,14 @@ Needs from the owner at the start of Phase 5:
 
 ## Known issues and tech debt
 
+- **Screenshot rows can't be corrected by hand.** A misread row stays as read until the CSV
+  confirms or replaces it; `release-provisional` only handles holds that never posted. Phase 6's
+  review queue is the place for correcting one.
+- **Screenshots of a card account** work like any other, but a card's provisional entries use
+  the same sign rules as its CSV (purchases negative), which is itself unverified.
+- **One scroll per command.** Two separate scrolls can be imported in two commands (the rows
+  they share are skipped), but the join between them is not checked for gaps.
+- **The model is called one image at a time**, sequentially, with no cost estimate before it runs.
 - **Review items repeat.** Until Phase 6 adds a way to resolve them, a later
   overlapping import can flag the same situation again (e.g. the old version
   of a renamed row is "missing" from every newer export).

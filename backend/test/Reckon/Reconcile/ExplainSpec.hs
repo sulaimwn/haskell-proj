@@ -29,6 +29,18 @@ spec = do
       explainReconciliation (inputs 100000 93692) {possibleDuplicates = [duplicate]}
         `shouldBe` [DuplicateMatchesGap duplicate]
 
+    it "points at provisional rows read from screenshots, which are in the ledger but not on the statement" $ do
+      -- A $100 hold is in the ledger (money out), so the ledger is $100 lower
+      -- than the statement, which doesn't have the hold yet.
+      let hold = EvidenceSummary (day 19) "SHELL GAS STATION" (Cents (-10000))
+      explainReconciliation (inputs 155243 145243) {provisionalRows = [hold]}
+        `shouldBe` [ProvisionalRowsExplainGap [hold]]
+
+    it "doesn't blame provisional rows that don't add up to the gap" $ do
+      let hold = EvidenceSummary (day 19) "SHELL GAS STATION" (Cents (-10000))
+      explainReconciliation (inputs 155243 145000) {provisionalRows = [hold]}
+        `shouldBe` [Unexplained (Cents 10243)]
+
     it "lists days no export includes" $
       explainReconciliation (inputs 100000 90000) {coveredRanges = [(day 1, day 10), (day 20, day 28)]}
         `shouldBe` [UncoveredDays [(day 11, day 19)]]
@@ -65,6 +77,7 @@ inputs statement ledger =
     , ledgerBalance = Cents (fromIntegral ledger)
     , unpostedRows = []
     , possibleDuplicates = []
+    , provisionalRows = []
     , openingBalanceDate = Just (fromGregorian 2026 1 31)
     , firstTransactionDate = Just (day 2)
     , coveredRanges = [(day 1, day 28)]
