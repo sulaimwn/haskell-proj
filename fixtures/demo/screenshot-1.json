@@ -1,0 +1,9 @@
+{
+  "accountLabel": "Chequing",
+  "transactions": [
+    {"dateText": "Nov 20", "description": "BLORPLE COFFEE", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 20", "description": "BLORPLE COFFEE", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 19", "description": "SNORKEL GAS STATION", "amountText": "-$100.00", "direction": "debit", "section": "pending", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 18", "description": "ZUMBO GROCERY", "amountText": "-$37.20", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false}
+  ]
+}

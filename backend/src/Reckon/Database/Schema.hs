@@ -16,12 +16,13 @@
 module Reckon.Database.Schema where
 
 import Data.Text (Text)
-import Data.Time (Day)
+import Data.Time (Day, UTCTime)
 import Database.Persist.TH (mkPersist, persistLowerCase, share, sqlSettings)
 import Reckon.Bank (BankAccountKind, Last4)
 import Reckon.Import.Dedupe (Fingerprint, ReviewItemKind)
 import Reckon.Ledger.AccountType (AccountType)
 import Reckon.Money (Cents)
+import Reckon.Screenshot.Resolution (ResolutionKind)
 
 -- Each block generates a record type (e.g. 'LedgerAccount'), a key type
 -- ('LedgerAccountId', distinct per table, so an entry id can never be
@@ -86,6 +87,106 @@ RawBankRow sql=raw_bank_rows
   fingerprint Fingerprint
   occurrence Int
   UniqueRawBankRow bankAccountId transactionDate fingerprint occurrence
+  deriving Show Eq
+
+JournalEntryEvidence sql=journal_entry_evidence
+  entryId JournalEntryId
+  rawBankRowId RawBankRowId
+  Primary entryId rawBankRowId
+  deriving Show Eq
+
+PostingRule sql=posting_rules
+  ruleText Text
+  priority Int
+  UniquePostingRule ruleText
+  deriving Show Eq
+
+Job sql=jobs
+  kind Text
+  runAt UTCTime
+  status Text
+  attempts Int
+  lockedAt UTCTime Maybe
+  finishedAt UTCTime Maybe
+  lastError Text Maybe
+  deriving Show Eq
+
+StoredReminder sql=reminders
+  kind Text
+  subject Text
+  message Text
+  detectedAt UTCTime
+  resolvedAt UTCTime Maybe
+  dismissedAt UTCTime Maybe
+  deriving Show Eq
+
+DueDate sql=due_dates
+  label Text
+  dayOfMonth Int
+  warnDays Int
+  deriving Show Eq
+
+StatementCheckpoint sql=statement_checkpoints
+  bankAccountId BankAccountId
+  asOfDate Day
+  statementBalanceCents Cents
+  UniqueStatementCheckpoint bankAccountId asOfDate
+  deriving Show Eq
+
+OpeningBalance sql=opening_balances
+  entryId JournalEntryId
+  bankAccountId BankAccountId
+  asOfDate Day
+  Primary entryId
+  deriving Show Eq
+
+Person sql=people
+  name Text
+  matchText Text
+  ledgerAccountId LedgerAccountId
+  UniquePersonName name
+  UniquePersonMatchText matchText
+  UniquePersonLedgerAccount ledgerAccountId
+  deriving Show Eq
+
+ScreenshotUpload sql=screenshot_uploads
+  fileSha256 Text sql=file_sha256
+  fileName Text
+  bankAccountId BankAccountId
+  takenOn Day
+  modelId Text
+  accountLabel Text
+  extractionJson Text
+  partialRowsDropped Int
+  UniqueScreenshotUpload fileSha256
+  deriving Show Eq
+
+ScreenshotRow sql=screenshot_rows
+  uploadId ScreenshotUploadId
+  bankAccountId BankAccountId
+  transactionDate Day
+  description Text
+  amountCents Cents
+  runningBalanceCents Cents Maybe
+  isPending Bool
+  uncertain Bool
+  fingerprint Fingerprint
+  occurrence Int
+  UniqueScreenshotRow bankAccountId transactionDate fingerprint occurrence
+  deriving Show Eq
+
+ScreenshotEntryEvidence sql=screenshot_entry_evidence
+  entryId JournalEntryId
+  screenshotRowId ScreenshotRowId
+  Primary entryId screenshotRowId
+  deriving Show Eq
+
+ProvisionalResolution sql=provisional_resolutions
+  screenshotRowId ScreenshotRowId
+  kind ResolutionKind
+  rawBankRowId RawBankRowId Maybe
+  supersededByScreenshotRowId ScreenshotRowId Maybe sql=superseded_by_screenshot_row_id
+  Primary screenshotRowId
   deriving Show Eq
 
 ImportReviewItem sql=import_review_items

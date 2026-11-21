@@ -188,6 +188,36 @@ ALTER TABLE public.bank_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
+-- Name: due_dates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.due_dates (
+    id bigint NOT NULL,
+    label text NOT NULL,
+    day_of_month integer NOT NULL,
+    warn_days integer DEFAULT 5 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT due_dates_day_of_month_check CHECK (((day_of_month >= 1) AND (day_of_month <= 31))),
+    CONSTRAINT due_dates_label_check CHECK ((btrim(label) <> ''::text)),
+    CONSTRAINT due_dates_warn_days_check CHECK (((warn_days >= 0) AND (warn_days <= 28)))
+);
+
+
+--
+-- Name: due_dates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.due_dates ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.due_dates_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: import_batch_coverage; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -266,6 +296,41 @@ ALTER TABLE public.import_review_items ALTER COLUMN id ADD GENERATED ALWAYS AS I
 
 
 --
+-- Name: jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.jobs (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    run_at timestamp with time zone NOT NULL,
+    status text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    locked_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT jobs_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT jobs_check CHECK (((status = 'running'::text) = (locked_at IS NOT NULL))),
+    CONSTRAINT jobs_kind_check CHECK ((kind = 'run_checks'::text)),
+    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.jobs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.jobs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: journal_entries; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -292,6 +357,16 @@ ALTER TABLE public.journal_entries ALTER COLUMN id ADD GENERATED ALWAYS AS IDENT
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+
+--
+-- Name: journal_entry_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.journal_entry_evidence (
+    entry_id bigint NOT NULL,
+    raw_bank_row_id bigint NOT NULL
 );
 
 
@@ -353,6 +428,88 @@ ALTER TABLE public.ledger_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENT
 
 
 --
+-- Name: opening_balances; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.opening_balances (
+    entry_id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    as_of_date date NOT NULL
+);
+
+
+--
+-- Name: people; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.people (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    match_text text NOT NULL,
+    ledger_account_id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT people_match_text_check CHECK (((match_text <> ''::text) AND (match_text = upper(match_text)))),
+    CONSTRAINT people_name_check CHECK ((name ~ '^[a-z0-9][a-z0-9-]*$'::text))
+);
+
+
+--
+-- Name: people_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.people ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.people_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: posting_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.posting_rules (
+    id bigint NOT NULL,
+    rule_text text NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT posting_rules_rule_text_check CHECK ((btrim(rule_text) <> ''::text))
+);
+
+
+--
+-- Name: posting_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.posting_rules ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.posting_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: provisional_resolutions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provisional_resolutions (
+    screenshot_row_id bigint NOT NULL,
+    kind text NOT NULL,
+    raw_bank_row_id bigint,
+    superseded_by_screenshot_row_id bigint,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT provisional_resolutions_check CHECK ((((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text])) AND (raw_bank_row_id IS NOT NULL) AND (superseded_by_screenshot_row_id IS NULL)) OR ((kind = 'superseded_by_screenshot'::text) AND (superseded_by_screenshot_row_id IS NOT NULL) AND (raw_bank_row_id IS NULL)) OR ((kind = 'released'::text) AND (raw_bank_row_id IS NULL) AND (superseded_by_screenshot_row_id IS NULL)))),
+    CONSTRAINT provisional_resolutions_kind_check CHECK ((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text, 'superseded_by_screenshot'::text, 'released'::text])))
+);
+
+
+--
 -- Name: raw_bank_rows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -386,11 +543,152 @@ ALTER TABLE public.raw_bank_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
+-- Name: reminders; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reminders (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    subject text NOT NULL,
+    message text NOT NULL,
+    detected_at timestamp with time zone NOT NULL,
+    resolved_at timestamp with time zone,
+    dismissed_at timestamp with time zone,
+    CONSTRAINT reminders_kind_check CHECK ((kind = ANY (ARRAY['statement_missing'::text, 'provisional_stale'::text, 'due_soon'::text]))),
+    CONSTRAINT reminders_message_check CHECK ((message <> ''::text)),
+    CONSTRAINT reminders_subject_check CHECK ((subject <> ''::text))
+);
+
+
+--
+-- Name: reminders_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.reminders ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.reminders_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.schema_migrations (
     version character varying NOT NULL
+);
+
+
+--
+-- Name: screenshot_entry_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_entry_evidence (
+    entry_id bigint NOT NULL,
+    screenshot_row_id bigint NOT NULL
+);
+
+
+--
+-- Name: screenshot_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_rows (
+    id bigint NOT NULL,
+    upload_id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    transaction_date date NOT NULL,
+    description text NOT NULL,
+    amount_cents bigint NOT NULL,
+    running_balance_cents bigint,
+    is_pending boolean NOT NULL,
+    uncertain boolean NOT NULL,
+    fingerprint text NOT NULL,
+    occurrence integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT screenshot_rows_amount_cents_check CHECK ((amount_cents <> 0)),
+    CONSTRAINT screenshot_rows_description_check CHECK ((description <> ''::text)),
+    CONSTRAINT screenshot_rows_occurrence_check CHECK ((occurrence >= 1))
+);
+
+
+--
+-- Name: screenshot_rows_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.screenshot_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.screenshot_rows_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: screenshot_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screenshot_uploads (
+    id bigint NOT NULL,
+    file_sha256 text NOT NULL,
+    file_name text NOT NULL,
+    bank_account_id bigint NOT NULL,
+    taken_on date NOT NULL,
+    model_id text NOT NULL,
+    account_label text NOT NULL,
+    extraction_json text NOT NULL,
+    partial_rows_dropped integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT screenshot_uploads_file_sha256_check CHECK ((file_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT screenshot_uploads_model_id_check CHECK ((model_id <> ''::text)),
+    CONSTRAINT screenshot_uploads_partial_rows_dropped_check CHECK ((partial_rows_dropped >= 0))
+);
+
+
+--
+-- Name: screenshot_uploads_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.screenshot_uploads ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.screenshot_uploads_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: statement_checkpoints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.statement_checkpoints (
+    id bigint NOT NULL,
+    bank_account_id bigint NOT NULL,
+    as_of_date date NOT NULL,
+    statement_balance_cents bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: statement_checkpoints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.statement_checkpoints ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.statement_checkpoints_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -416,6 +714,14 @@ ALTER TABLE ONLY public.bank_accounts
 
 ALTER TABLE ONLY public.bank_accounts
     ADD CONSTRAINT bank_accounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: due_dates due_dates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.due_dates
+    ADD CONSTRAINT due_dates_pkey PRIMARY KEY (id);
 
 
 --
@@ -451,6 +757,14 @@ ALTER TABLE ONLY public.import_review_items
 
 
 --
+-- Name: jobs jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.jobs
+    ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: journal_entries journal_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -464,6 +778,14 @@ ALTER TABLE ONLY public.journal_entries
 
 ALTER TABLE ONLY public.journal_entries
     ADD CONSTRAINT journal_entries_reverses_entry_id_key UNIQUE (reverses_entry_id);
+
+
+--
+-- Name: journal_entry_evidence journal_entry_evidence_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_pkey PRIMARY KEY (entry_id, raw_bank_row_id);
 
 
 --
@@ -491,6 +813,86 @@ ALTER TABLE ONLY public.ledger_accounts
 
 
 --
+-- Name: opening_balances opening_balances_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_pkey PRIMARY KEY (entry_id);
+
+
+--
+-- Name: people people_ledger_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_ledger_account_id_key UNIQUE (ledger_account_id);
+
+
+--
+-- Name: people people_match_text_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_match_text_key UNIQUE (match_text);
+
+
+--
+-- Name: people people_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_name_key UNIQUE (name);
+
+
+--
+-- Name: people people_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: posting_rules posting_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posting_rules
+    ADD CONSTRAINT posting_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: posting_rules posting_rules_rule_text_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posting_rules
+    ADD CONSTRAINT posting_rules_rule_text_key UNIQUE (rule_text);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_pkey PRIMARY KEY (screenshot_row_id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_raw_bank_row_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_raw_bank_row_id_key UNIQUE (raw_bank_row_id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_superseded_by_screenshot_row_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_superseded_by_screenshot_row_id_key UNIQUE (superseded_by_screenshot_row_id);
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_bank_account_id_transaction_date_fingerprint__key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -507,6 +909,14 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 
 --
+-- Name: reminders reminders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reminders
+    ADD CONSTRAINT reminders_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -515,10 +925,87 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_pkey PRIMARY KEY (entry_id, screenshot_row_id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_bank_account_id_transaction_date_fingerprin_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_bank_account_id_transaction_date_fingerprin_key UNIQUE (bank_account_id, transaction_date, fingerprint, occurrence);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_file_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_file_sha256_key UNIQUE (file_sha256);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: statement_checkpoints statement_checkpoints_bank_account_id_as_of_date_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_bank_account_id_as_of_date_key UNIQUE (bank_account_id, as_of_date);
+
+
+--
+-- Name: statement_checkpoints statement_checkpoints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: jobs_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX jobs_due_idx ON public.jobs USING btree (run_at) WHERE (status = 'queued'::text);
+
+
+--
+-- Name: jobs_one_pending_per_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX jobs_one_pending_per_kind ON public.jobs USING btree (kind) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text]));
+
+
+--
 -- Name: journal_entries_occurred_on_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX journal_entries_occurred_on_idx ON public.journal_entries USING btree (occurred_on);
+
+
+--
+-- Name: journal_entry_evidence_raw_bank_row_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX journal_entry_evidence_raw_bank_row_id_idx ON public.journal_entry_evidence USING btree (raw_bank_row_id);
 
 
 --
@@ -536,10 +1023,38 @@ CREATE INDEX journal_lines_ledger_account_id_idx ON public.journal_lines USING b
 
 
 --
+-- Name: opening_balances_bank_account_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX opening_balances_bank_account_id_idx ON public.opening_balances USING btree (bank_account_id);
+
+
+--
 -- Name: raw_bank_rows_first_seen_batch_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX raw_bank_rows_first_seen_batch_id_idx ON public.raw_bank_rows USING btree (first_seen_batch_id);
+
+
+--
+-- Name: reminders_one_open_per_subject; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX reminders_one_open_per_subject ON public.reminders USING btree (kind, subject) WHERE (resolved_at IS NULL);
+
+
+--
+-- Name: screenshot_entry_evidence_screenshot_row_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screenshot_entry_evidence_screenshot_row_id_idx ON public.screenshot_entry_evidence USING btree (screenshot_row_id);
+
+
+--
+-- Name: screenshot_rows_upload_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screenshot_rows_upload_id_idx ON public.screenshot_rows USING btree (upload_id);
 
 
 --
@@ -578,6 +1093,13 @@ CREATE TRIGGER journal_entries_cannot_be_truncated BEFORE TRUNCATE ON public.jou
 
 
 --
+-- Name: journal_entry_evidence journal_entry_evidence_is_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER journal_entry_evidence_is_append_only BEFORE DELETE OR UPDATE ON public.journal_entry_evidence FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
 -- Name: journal_entries journal_entry_is_balanced; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -613,6 +1135,20 @@ CREATE TRIGGER journal_lines_only_with_their_entry BEFORE INSERT ON public.journ
 
 
 --
+-- Name: opening_balances opening_balances_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER opening_balances_are_append_only BEFORE DELETE OR UPDATE ON public.opening_balances FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER provisional_resolutions_are_append_only BEFORE DELETE OR UPDATE ON public.provisional_resolutions FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
 -- Name: raw_bank_rows raw_bank_rows_are_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -624,6 +1160,34 @@ CREATE TRIGGER raw_bank_rows_are_append_only BEFORE DELETE OR UPDATE ON public.r
 --
 
 CREATE TRIGGER raw_bank_rows_cannot_be_truncated BEFORE TRUNCATE ON public.raw_bank_rows FOR EACH STATEMENT EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_is_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_entry_evidence_is_append_only BEFORE DELETE OR UPDATE ON public.screenshot_entry_evidence FOR EACH ROW EXECUTE FUNCTION public.reject_journal_modification();
+
+
+--
+-- Name: screenshot_rows screenshot_rows_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_rows_are_append_only BEFORE DELETE OR UPDATE ON public.screenshot_rows FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screenshot_uploads_are_append_only BEFORE DELETE OR UPDATE ON public.screenshot_uploads FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
+
+
+--
+-- Name: statement_checkpoints statement_checkpoints_are_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER statement_checkpoints_are_append_only BEFORE DELETE OR UPDATE ON public.statement_checkpoints FOR EACH ROW EXECUTE FUNCTION public.reject_evidence_modification();
 
 
 --
@@ -691,6 +1255,22 @@ ALTER TABLE ONLY public.journal_entries
 
 
 --
+-- Name: journal_entry_evidence journal_entry_evidence_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
+
+
+--
+-- Name: journal_entry_evidence journal_entry_evidence_raw_bank_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.journal_entry_evidence
+    ADD CONSTRAINT journal_entry_evidence_raw_bank_row_id_fkey FOREIGN KEY (raw_bank_row_id) REFERENCES public.raw_bank_rows(id);
+
+
+--
 -- Name: journal_lines journal_lines_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -704,6 +1284,54 @@ ALTER TABLE ONLY public.journal_lines
 
 ALTER TABLE ONLY public.journal_lines
     ADD CONSTRAINT journal_lines_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
+
+
+--
+-- Name: opening_balances opening_balances_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
+-- Name: opening_balances opening_balances_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opening_balances
+    ADD CONSTRAINT opening_balances_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
+
+
+--
+-- Name: people people_ledger_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.people
+    ADD CONSTRAINT people_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_raw_bank_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_raw_bank_row_id_fkey FOREIGN KEY (raw_bank_row_id) REFERENCES public.raw_bank_rows(id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_screenshot_row_id_fkey FOREIGN KEY (screenshot_row_id) REFERENCES public.screenshot_rows(id);
+
+
+--
+-- Name: provisional_resolutions provisional_resolutions_superseded_by_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provisional_resolutions
+    ADD CONSTRAINT provisional_resolutions_superseded_by_screenshot_row_id_fkey FOREIGN KEY (superseded_by_screenshot_row_id) REFERENCES public.screenshot_rows(id);
 
 
 --
@@ -723,6 +1351,54 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 
 --
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES public.journal_entries(id);
+
+
+--
+-- Name: screenshot_entry_evidence screenshot_entry_evidence_screenshot_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_entry_evidence
+    ADD CONSTRAINT screenshot_entry_evidence_screenshot_row_id_fkey FOREIGN KEY (screenshot_row_id) REFERENCES public.screenshot_rows(id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
+-- Name: screenshot_rows screenshot_rows_upload_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_rows
+    ADD CONSTRAINT screenshot_rows_upload_id_fkey FOREIGN KEY (upload_id) REFERENCES public.screenshot_uploads(id);
+
+
+--
+-- Name: screenshot_uploads screenshot_uploads_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screenshot_uploads
+    ADD CONSTRAINT screenshot_uploads_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
+-- Name: statement_checkpoints statement_checkpoints_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_checkpoints
+    ADD CONSTRAINT statement_checkpoints_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.bank_accounts(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -735,4 +1411,9 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20260922210000'),
-    ('20260923120000');
+    ('20260923120000'),
+    ('20260924090000'),
+    ('20260925090000'),
+    ('20260926090000'),
+    ('20260927090000'),
+    ('20260928090000');

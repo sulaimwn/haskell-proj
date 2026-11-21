@@ -7,9 +7,12 @@ module Reckon.Money
   ( Cents (..)
   , negateCents
   , sumCents
+  , renderCents
   ) where
 
 import Data.Int (Int64)
+import Data.Text (Text)
+import Data.Text qualified as Text
 import Database.Persist.Sql (PersistField, PersistFieldSql)
 
 -- | A signed amount of cents. In the journal, positive is a debit and
@@ -34,3 +37,10 @@ negateCents (Cents amount) = Cents (negate amount)
 
 sumCents :: (Foldable t) => t Cents -> Cents
 sumCents = mconcat . foldr (:) []
+
+-- | For display only: @Cents (-1234)@ is @"-$12.34"@.
+renderCents :: Cents -> Text
+renderCents (Cents cents) =
+  Text.pack ((if cents < 0 then "-" else "") <> "$" <> show (abs cents `div` 100) <> "." <> twoDigits (abs cents `mod` 100))
+  where
+    twoDigits number = (if number < 10 then "0" else "") <> show number

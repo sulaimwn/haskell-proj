@@ -1,0 +1,13 @@
+"Account Type","Account Number","Transaction Date","Cheque Number","Description 1","Description 2","CAD$","USD$"
+Chequing,00000-0001234,2/2/2026,,"PAYROLL DEPOSIT","EXAMPLE EMPLOYER INC",1500.00,
+Chequing,00000-0001234,2/3/2026,,"Online Banking payment - 9876","RBC VISA",-500.00,
+Chequing,00000-0001234,2/4/2026,,"e-Transfer sent","ALEX EXAMPLE",-30.00,
+Visa,4500000000009876,2/5/2026,,"PAYMENT - THANK YOU","",500.00,
+Chequing,00000-0001234,2/6/2026,,"e-Transfer cancelled","ALEX EXAMPLE",30.00,
+Visa,4500000000009876,2/8/2026,,"COFFEE CO","",-4.50,
+Chequing,00000-0001234,2/9/2026,,"Online Banking payment - 4321","AMEX CREDIT CARD",-120.00,
+Chequing,00000-0001234,2/12/2026,,"Online Banking payment - 1111","EXAMPLE HYDRO",-85.40,
+Chequing,00000-0001234,2/14/2026,,"Online Banking transfer - 5555","",-200.00,
+Visa,4500000000009876,2/15/2026,,"PAYMENT - THANK YOU","",200.00,
+Visa,4500000000009876,2/16/2026,,"RETURN - BOOKSHOP","",200.00,
+Chequing,00000-0001234,2/20/2026,,"Interac purchase","CORNER GROCERY",-42.17,

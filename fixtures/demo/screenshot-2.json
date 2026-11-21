@@ -1,0 +1,9 @@
+{
+  "accountLabel": "Chequing",
+  "transactions": [
+    {"dateText": "Nov 18", "description": "ZUMBO GROCERY", "amountText": "-$37.20", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 17", "description": "QUIBBLE BISTRO", "amountText": "-$40.00", "direction": "debit", "section": "pending", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 15", "description": "PLINTH HOTEL", "amountText": "-$75.00", "direction": "debit", "section": "pending", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Nov 13", "description": "PAYROLL DEPOSIT EXAMPLE EMPLOYER INC", "amountText": "$1,800.00", "direction": "credit", "section": "posted", "runningBalanceText": "$6,577.97", "uncertain": false, "partial": false}
+  ]
+}

@@ -12,3 +12,306 @@ export interface IHealthResponse {
 }
 
 export type DatabaseStatus = "reachable" | "unreachable";
+
+export type ReconciliationState = "reconciled" | "gap";
+
+export type CheckpointSummary = ICheckpointSummary;
+
+export interface ICheckpointSummary {
+  asOf: string;
+  statementBalanceCents: number;
+  ledgerBalanceCents: number;
+  state: ReconciliationState;
+  explanation: string[];
+}
+
+export type AccountSummary = IAccountSummary;
+
+export interface IAccountSummary {
+  last4: string;
+  nickname: string;
+  kind: string;
+  balanceCents: number;
+  unpostedRows: number;
+  openProvisional: number;
+  latestCheckpoint: CheckpointSummary | null;
+}
+
+export type TransactionSource = "csv" | "screenshot" | "opening_balance" | "other";
+
+export type CounterLine = ICounterLine;
+
+export interface ICounterLine {
+  account: string;
+  amountCents: number;
+}
+
+export type TransactionView = ITransactionView;
+
+export interface ITransactionView {
+  entryId: number;
+  date: string;
+  description: string;
+  amountCents: number;
+  counterLines: CounterLine[];
+  source: TransactionSource;
+  rowId: number | null;
+  provisional: boolean;
+}
+
+export type SpendingLine = ISpendingLine;
+
+export interface ISpendingLine {
+  account: string;
+  cents: number;
+}
+
+export type SpendingMonth = ISpendingMonth;
+
+export interface ISpendingMonth {
+  month: string;
+  totalCents: number;
+  categories: SpendingLine[];
+}
+
+export type PersonBalance = IPersonBalance;
+
+export interface IPersonBalance {
+  name: string;
+  owedCents: number;
+}
+
+export type ReceivablesResponse = IReceivablesResponse;
+
+export interface IReceivablesResponse {
+  people: PersonBalance[];
+  totalOwedCents: number;
+}
+
+export type ReviewReasonKind = "ambiguous_pair" | "zero_amount" | "possible_repayment";
+
+export type ReviewRow = IReviewRow;
+
+export interface IReviewRow {
+  rowId: number;
+  account: string;
+  date: string;
+  description: string;
+  amountCents: number;
+  reason: ReviewReasonKind;
+  detail: string;
+  people: string[];
+}
+
+export type ProvisionalRow = IProvisionalRow;
+
+export interface IProvisionalRow {
+  screenshotRowId: number;
+  account: string;
+  date: string;
+  description: string;
+  amountCents: number;
+  pending: boolean;
+  posted: boolean;
+}
+
+export type ImportFlagKind = "possible_duplicate" | "missing_from_newer_export";
+
+export type ImportFlag = IImportFlag;
+
+export interface IImportFlag {
+  kind: ImportFlagKind;
+  account: string;
+  date: string;
+  description: string;
+  amountCents: number;
+  relatedDescription: string | null;
+}
+
+export type ReviewQueue = IReviewQueue;
+
+export interface IReviewQueue {
+  unposted: ReviewRow[];
+  provisional: ProvisionalRow[];
+  importFlags: ImportFlag[];
+}
+
+export type LedgerAccountView = ILedgerAccountView;
+
+export interface ILedgerAccountView {
+  name: string;
+  accountType: string;
+}
+
+export type UploadedFile = IUploadedFile;
+
+export interface IUploadedFile {
+  fileName: string;
+  contentBase64: string;
+}
+
+export type ImportCsvRequest = IImportCsvRequest;
+
+export interface IImportCsvRequest {
+  file: UploadedFile;
+}
+
+export type ImportScreenshotsRequest = IImportScreenshotsRequest;
+
+export interface IImportScreenshotsRequest {
+  last4: string;
+  takenOn: string | null;
+  files: UploadedFile[];
+}
+
+export type ActionResult = IActionResult;
+
+export interface IActionResult {
+  message: string;
+  details: string[];
+}
+
+export type SettleRequest = ISettleRequest;
+
+export interface ISettleRequest {
+  account: string;
+}
+
+export type SplitShare = ISplitShare;
+
+export interface ISplitShare {
+  person: string;
+  cents: number;
+}
+
+export type SplitRequest = ISplitRequest;
+
+export interface ISplitRequest {
+  category: string;
+  equalWith: string[] | null;
+  shares: SplitShare[] | null;
+}
+
+export type AddPersonRequest = IAddPersonRequest;
+
+export interface IAddPersonRequest {
+  name: string;
+  matchText: string;
+}
+
+export type AddRuleRequest = IAddRuleRequest;
+
+export interface IAddRuleRequest {
+  ruleText: string;
+  priority: number | null;
+}
+
+export type RuleView = IRuleView;
+
+export interface IRuleView {
+  ruleId: number;
+  ruleText: string;
+  priority: number;
+  problem: string | null;
+}
+
+export type RuleProblemView = IRuleProblemView;
+
+export interface IRuleProblemView {
+  line: number;
+  column: number;
+  message: string;
+}
+
+export type PreviewEffectKind = "move" | "already_there" | "on_next_post" | "cannot_change";
+
+export type PreviewRowView = IPreviewRowView;
+
+export interface IPreviewRowView {
+  rowId: number;
+  date: string;
+  description: string;
+  amountCents: number;
+  effect: PreviewEffectKind;
+  detail: string | null;
+}
+
+export type RulePreviewView = IRulePreviewView;
+
+export interface IRulePreviewView {
+  matched: number;
+  wouldMove: number;
+  alreadyThere: number;
+  onNextPost: number;
+  cannotChange: number;
+  rows: PreviewRowView[];
+}
+
+export type CheckRuleRequest = ICheckRuleRequest;
+
+export interface ICheckRuleRequest {
+  ruleText: string;
+}
+
+export type RuleCheck = IRuleCheck;
+
+export interface IRuleCheck {
+  problem: RuleProblemView | null;
+  canonicalText: string | null;
+  preview: RulePreviewView | null;
+}
+
+export type ApplyRuleRequest = IApplyRuleRequest;
+
+export interface IApplyRuleRequest {
+  ruleText: string;
+}
+
+export type ReminderKindTag = "statement_missing" | "provisional_stale" | "due_soon";
+
+export type ReminderView = IReminderView;
+
+export interface IReminderView {
+  reminderId: number;
+  kind: ReminderKindTag;
+  message: string;
+  detectedAt: string;
+}
+
+export type DueDateView = IDueDateView;
+
+export interface IDueDateView {
+  dueDateId: number;
+  label: string;
+  dayOfMonth: number;
+  warnDays: number;
+}
+
+export type RemindersResponse = IRemindersResponse;
+
+export interface IRemindersResponse {
+  reminders: ReminderView[];
+  dueDates: DueDateView[];
+  lastCheckedAt: string | null;
+}
+
+export type AddDueDateRequest = IAddDueDateRequest;
+
+export interface IAddDueDateRequest {
+  label: string;
+  dayOfMonth: number;
+  warnDays: number | null;
+}
+
+export type BalanceRequest = IBalanceRequest;
+
+export interface IBalanceRequest {
+  date: string;
+  balanceCents: number;
+}
+
+export type ApiProblem = IApiProblem;
+
+export interface IApiProblem {
+  problem: string;
+}

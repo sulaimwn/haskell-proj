@@ -77,6 +77,10 @@ Phase 2 added `bank_accounts`, `import_batches`, `import_batch_coverage`, `raw_b
 and `import_review_items`. `raw_bank_rows` uses `occurrence` instead of
 `position_within_day`, and omits status and screenshot-only columns for now
 (DECISIONS D029, D035).
+Phase 3 added `journal_entry_evidence` (the `raw_row_links` below),
+`posting_rules` (was `categorization_rules` before Phase 7), `statement_checkpoints` and `opening_balances`.
+Whether a row is posted is a query over the evidence links, not a status
+column (see [ARCHITECTURE.md](ARCHITECTURE.md#posting-and-reconciliation-phase-3)).
 
 | Table | Purpose |
 |---|---|
@@ -90,7 +94,7 @@ and `import_review_items`. `raw_bank_rows` uses `occurrence` instead of
 | `statement_checkpoints` | bank_account_id, as_of_date, statement_balance_cents |
 | `screenshot_uploads` | sha256, uploaded_at, model id used, raw extraction JSON, status |
 | `jobs` | Postgres-backed job queue (`FOR UPDATE SKIP LOCKED`), retries, backoff |
-| `categorization_rules` | stored rules for categorizing and splitting transactions |
+| `posting_rules` | stored rules (one line of the rule language each) for categorizing and splitting transactions |
 
 ## Phases
 
@@ -134,6 +138,18 @@ account number. Imports are idempotent:
 Fake RBC-format CSV fixtures cover these edge cases.
 
 ### Phase 3: Turning evidence into entries
+
+**As built** (the bullets below are the original plan; the refinements are
+in DECISIONS D038–D048):
+- Transfers are **two entries through `asset:clearing`**, one per leg on its
+  own date, not one entry, so each account matches its statement on every
+  date (D040).
+- Pending vs posted and pending debit holds **moved to Phase 5** (D045):
+  CSV exports only contain posted transactions.
+- Payments to untracked cards go to `liability:untracked-cards` (D038, a
+  default the owner may override).
+- Reading the counterparty's name out of an e-Transfer description **moved
+  to Phase 4**, where it's first needed, to match repayments (D048).
 
 - Simple rows become entries, categorized by rules where possible, otherwise
   into an uncategorized expense account.
@@ -180,7 +196,28 @@ of three `receivable:<friend>` accounts. When a friend's e-Transfer later
 appears in an import, it can be matched to their open receivable. Reported
 spending reflects only my share.
 
+**As built** (DECISIONS D049–D053): a `people` table (a name and the text
+their e-Transfers contain); a split is one entry with a line per participant,
+my share being the remainder; money in that mentions a person is *suggested*
+as their repayment (applied with `post-row`), never applied automatically
+(D050, the owner may override); `recategorize` fixes an already-posted row;
+`owed` and `spending` are CLI reports. Matching is by stored text rather than
+by parsing e-Transfer descriptions (D053). The frontend views for receivables
+and spending are Phase 6 (built: D065).
+
 ### Phase 5: Screenshot ingestion with Claude
+
+**As built** (DECISIONS D054-D060): a small raw-HTTP client (there's no official Haskell SDK) with the
+model chosen by `ANTHROPIC_MODEL`; the model only transcribes and Haskell does the arithmetic and
+refuses anything off (D055); overlapping screenshots are joined by their overlap (D056); screenshot
+rows live in their own tables, not `raw_bank_rows`, are posted provisionally, and resolve by
+reversal (D058). The upload endpoint and page arrived in Phase 6 (D062); the command line
+(`import-screenshots`) still works and names the account by its last 4 digits. The evaluation script is
+`eval-screenshots`.
+
+Also includes, moved from Phase 3 (D045): pending vs posted (a tip changes
+the amount) and pending debit holds, as provisional entries replaced by
+reversal when the posted row arrives.
 
 1. Upload screenshots of the RBC app's transaction list from the frontend.
    Exact duplicate images are rejected by hash.
@@ -213,7 +250,25 @@ Accounts overview (balances, reconciliation status), import page, review
 queue, transaction list (filter, split with friends), spending by category
 per month (excluding transfers and friends' shares), receivables.
 
+**As built** (DECISIONS D061-D065): everything the command line does is an
+HTTP endpoint with generated TypeScript types and a page. Reads answer one
+screen's question each (`Reckon.Views`); actions run the CLI's code and return
+its wording (`Reckon.Messages`); refusals are `{problem}` with a status that
+says whose fault it was (D062). Because the API has no login, it listens on
+loopback only, refuses unknown `Host` headers (DNS rebinding) and refuses
+non-JSON writes (D061). Uploads are base64 JSON, not multipart. The frontend
+is React with a hash router, TanStack Query and no UI library (D064).
+Deferred: paging past 200 rows, listing/editing people and rules, exact-amount
+splits in the form, authentication (D065).
+
 ### Phase 7: Scheduled jobs and rules
+
+**As built (DECISIONS D067-D073).** Rule language (D067-D069): a one-line rule language (`when
+description contains "UBER" and amount < -50.00 then categorize expense:transport`, or `... then
+split expense:food equally with alex, sam`), parsed with megaparsec in `Reckon.Rules.Language`, evaluated
+in `Reckon.Rules.Eval`, stored as canonical text in `posting_rules` (replacing `categorization_rules`),
+validated with line and column errors shown in the Rules page, previewed against existing rows as you
+type, and applied to the past only on request. The job queue and recurring checks are the second half.
 
 - The Postgres job queue runs recurring checks: statement periods with no
   checkpoint, provisional entries with no CSV confirmation after N days, and
@@ -223,6 +278,13 @@ per month (excluding transfers and friends' shares), receivables.
   "preview against past transactions" feature.
 
 ### Phase 8: Demo and README
+
+**As built (DECISIONS D074):** `make demo` runs the app on a fake three-month dataset (`fixtures/demo/`) in its own
+database; the seed uses the real commands and a local stand-in for the Anthropic API, and asserts the outcomes it
+advertises (`scripts/demo.sh --check`, part of `make check`). It covers every case below except **a USD purchase and
+refund**, which reckon deliberately doesn't support (CAD-only, D023: a USD row is rejected with a line number). The
+README has the architecture, the invariants and how each is enforced, the dedupe and screenshot-alignment approaches, an
+honest "extraction accuracy: not measured yet" (nothing has run against the real API), and the known limitations.
 
 A seed script with a fully fake dataset covering every hard case: duplicate
 same-day coffees, overlapping imports, a transfer, a pending-to-posted tip

@@ -25,6 +25,12 @@ load_env() {
   # shellcheck source=/dev/null
   source .env
   set +a
+  # `make demo` runs everything against a separate database filled with fake
+  # data (scripts/demo.sh), so the development database is never touched.
+  if [[ "${RECKON_DEMO:-}" == "1" ]]; then
+    DATABASE_URL="postgres://reckon:reckon@localhost:${RECKON_DB_PORT:-5433}/reckon_demo?sslmode=disable"
+    export DATABASE_URL
+  fi
   # docker-compose.yml runs dbmate as this user so files it writes are yours.
   export RECKON_UID RECKON_GID
   RECKON_UID="$(id -u)"
@@ -46,8 +52,8 @@ install_git_hooks() {
 recreate_test_database() {
   local test_database_url="postgres://reckon:reckon@db:5432/reckon_test?sslmode=disable"
   log "Recreating the test database"
-  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
-  docker compose run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
+  docker compose --progress quiet run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema drop >/dev/null
+  docker compose --progress quiet run --rm -e DATABASE_URL="$test_database_url" dbmate --no-dump-schema up >/dev/null
 }
 
 require_dev_tools() {

@@ -1,0 +1,7 @@
+{
+  "accountLabel": "Chequing",
+  "transactions": [
+    {"dateText": "Mar 2", "description": "SHELL GAS STATION", "amountText": "-$43.20", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 28", "description": "CORNER GROCERY", "amountText": "-$12.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false}
+  ]
+}

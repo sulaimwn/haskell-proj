@@ -12,6 +12,8 @@ module Reckon.Config
   ) where
 
 import Data.ByteString (ByteString)
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import System.Environment (getEnvironment)
@@ -23,6 +25,14 @@ data Config = Config
   -- ^ libpq connection string, e.g. @postgres://user:pass\@localhost:5433/reckon@.
   , port :: Int
   -- ^ Port the HTTP server listens on.
+  , host :: String
+  -- ^ Address the server binds. Loopback by default: the API serves your
+  -- financial data and has no login, so it must not be reachable from the
+  -- network (DECISIONS D061).
+  , allowedHosts :: [Text]
+  -- ^ Host names a request may be addressed to (the @Host@ header). A page
+  -- on another site can make your browser send requests to localhost, but
+  -- can't make them carry a host name you didn't list (D061).
   }
   deriving stock (Show, Eq)
 
@@ -34,13 +44,21 @@ data ConfigError
 defaultPort :: Int
 defaultPort = 8080
 
+defaultHost :: String
+defaultHost = "127.0.0.1"
+
+defaultAllowedHosts :: [Text]
+defaultAllowedHosts = ["localhost", "127.0.0.1", "[::1]"]
+
 configFromEnvironment :: [(String, String)] -> Either ConfigError Config
 configFromEnvironment environment = do
   databaseUrl <- maybe (Left (MissingVariable "DATABASE_URL")) Right (lookupNonEmpty "DATABASE_URL")
   port <- case lookupNonEmpty "RECKON_PORT" of
     Nothing -> Right defaultPort
     Just rawPort -> maybe (Left (InvalidPort rawPort)) Right (parsePort rawPort)
-  pure Config {databaseUrl = Text.encodeUtf8 (Text.pack databaseUrl), port}
+  let host = fromMaybe defaultHost (lookupNonEmpty "RECKON_HOST")
+      allowedHosts = maybe defaultAllowedHosts (filter (not . Text.null) . map Text.strip . Text.splitOn "," . Text.pack) (lookupNonEmpty "RECKON_ALLOWED_HOSTS")
+  pure Config {databaseUrl = Text.encodeUtf8 (Text.pack databaseUrl), port, host, allowedHosts}
   where
     lookupNonEmpty name = case lookup name environment of
       Just value | not (null value) -> Just value

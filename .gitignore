@@ -9,6 +9,7 @@
 
 # Haskell
 dist-newstyle/
+dist-newstyle-werror/
 .ghc.environment.*
 
 # Node

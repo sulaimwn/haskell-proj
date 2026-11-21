@@ -1,0 +1,5 @@
+"Account Type","Account Number","Transaction Date","Cheque Number","Description 1","Description 2","CAD$","USD$"
+Chequing,00000-0001234,3/2/2026,,"Interac purchase","TASTY BISTRO",-120.00,
+Chequing,00000-0001234,3/4/2026,,"Interac purchase","CORNER GROCERY",-100.00,
+Chequing,00000-0001234,3/6/2026,,"e-Transfer received","ALEX EXAMPLE",30.00,
+Chequing,00000-0001234,3/7/2026,,"e-Transfer received","SAM EXAMPLE",25.00,

@@ -24,23 +24,50 @@ library
   import:          shared
   hs-source-dirs:  src
   exposed-modules:
+    Reckon.Anthropic
     Reckon.Api
     Reckon.Api.JsonOptions
     Reckon.Api.Types
     Reckon.Api.TypeScript
     Reckon.App
     Reckon.Bank
+    Reckon.Checks
     Reckon.Config
     Reckon.Database
     Reckon.Database.Schema
     Reckon.Import
     Reckon.Import.Dedupe
     Reckon.Import.RbcCsv
+    Reckon.Jobs
     Reckon.Ledger
     Reckon.Ledger.AccountType
     Reckon.Ledger.Entry
+    Reckon.Messages
     Reckon.Money
+    Reckon.People
+    Reckon.Posting
+    Reckon.Posting.Classify
+    Reckon.Posting.Split
+    Reckon.Reconcile
+    Reckon.Reconcile.Explain
+    Reckon.Reminders
+    Reckon.Report
+    Reckon.Rules
+    Reckon.Rules.Eval
+    Reckon.Rules.History
+    Reckon.Rules.Language
+    Reckon.Screenshot.Align
+    Reckon.Screenshot.Eval
+    Reckon.Screenshot.Extraction
+    Reckon.Screenshot.Import
+    Reckon.Screenshot.Match
+    Reckon.Screenshot.Resolution
+    Reckon.Screenshot.Score
+    Reckon.Screenshot.Store
+    Reckon.Security
     Reckon.Server
+    Reckon.Sharing
+    Reckon.Views
 
   other-modules:   Paths_reckon
   autogen-modules: Paths_reckon
@@ -48,12 +75,20 @@ library
     , aeson
     , aeson-typescript
     , base16-bytestring
+    , base64-bytestring
     , bytestring
+    , case-insensitive
     , cassava
     , containers
     , cryptohash-sha256
+    , directory
     , esqueleto
+    , filepath
+    , http-client
+    , http-client-tls
+    , http-types
     , monad-logger
+    , megaparsec
     , mtl
     , persistent
     , persistent-postgresql
@@ -73,6 +108,8 @@ executable reckon-server
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
   build-depends:
     , reckon
+    , text
+    , time
     , wai-extra
     , warp
 
@@ -87,6 +124,7 @@ executable reckon-cli
     , persistent
     , reckon
     , text
+    , time
 
 -- Writes the TypeScript API types for the frontend. `make codegen` runs this.
 executable reckon-codegen
@@ -103,26 +141,49 @@ test-suite reckon-test
   hs-source-dirs: test
   main-is:        Main.hs
   other-modules:
+    Reckon.AnthropicSpec
+    Reckon.ChecksSpec
+    Reckon.ApiSpec
     Reckon.Api.TypesSpec
     Reckon.ConfigSpec
     Reckon.Import.DedupeSpec
     Reckon.Import.RbcCsvSpec
     Reckon.ImportSpec
+    Reckon.JobsSpec
     Reckon.Ledger.EntrySpec
     Reckon.LedgerSpec
+    Reckon.Posting.ClassifySpec
+    Reckon.Posting.SplitSpec
+    Reckon.PostingSpec
+    Reckon.Reconcile.ExplainSpec
+    Reckon.Rules.LanguageSpec
+    Reckon.RulesSpec
+    Reckon.ScenarioSupport
+    Reckon.ScreenshotSpec
+    Reckon.Screenshot.AlignSpec
+    Reckon.Screenshot.ExtractionSpec
+    Reckon.Screenshot.MatchSpec
+    Reckon.Screenshot.ScoreSpec
+    Reckon.SharingSpec
     Reckon.ServerSpec
     Reckon.TestSupport
 
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
   build-depends:
     , aeson
+    , base64-bytestring
     , bytestring
     , containers
     , hedgehog
     , hspec
     , hspec-hedgehog
     , hspec-wai
+    , http-client
+    , http-types
     , persistent
     , reckon
     , text
     , time
+    , wai
+    , wai-extra
+    , warp

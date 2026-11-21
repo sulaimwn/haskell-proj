@@ -22,5 +22,14 @@ spec = describe "configFromEnvironment" $ do
   it "rejects a RECKON_PORT that is not a number" $
     configFromEnvironment (("RECKON_PORT", "eighty") : databaseUrlOnly) `shouldBe` Left (InvalidPort "eighty")
 
+  it "listens on the loopback address only, unless told otherwise" $ do
+    fmap (.host) (configFromEnvironment databaseUrlOnly) `shouldBe` Right "127.0.0.1"
+    fmap (.host) (configFromEnvironment (("RECKON_HOST", "0.0.0.0") : databaseUrlOnly)) `shouldBe` Right "0.0.0.0"
+
+  it "only accepts requests addressed to localhost, unless told otherwise" $ do
+    fmap (.allowedHosts) (configFromEnvironment databaseUrlOnly) `shouldBe` Right ["localhost", "127.0.0.1", "[::1]"]
+    fmap (.allowedHosts) (configFromEnvironment (("RECKON_ALLOWED_HOSTS", "reckon.example.com, localhost,") : databaseUrlOnly))
+      `shouldBe` Right ["reckon.example.com", "localhost"]
+
   it "rejects a RECKON_PORT outside the valid range" $
     configFromEnvironment (("RECKON_PORT", "70000") : databaseUrlOnly) `shouldBe` Left (InvalidPort "70000")

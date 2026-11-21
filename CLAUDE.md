@@ -46,6 +46,9 @@ misled about the current state?* If yes, fix the docs.
 
 - **Descriptive names** (`statementBalanceCents`, not `sb`), and short comments
   that explain *why* where it isn't obvious.
+- **Rules are text** (D067-D069): `posting_rules.rule_text` is the only copy of a rule, always the
+  canonical `renderRule` of a parsed rule. Add a feature to the language by changing `Rules.Language`
+  (parser, renderer, the round-trip generator in `LanguageSpec`) and `Rules.Eval` together.
 - **Money is never floating point.** `Cents` newtype over `Int64` in Haskell,
   `BIGINT` in SQL, integer cents in TypeScript. Format only at display time.
 - **Make invalid states unrepresentable:** a newtype per ID type, and separate
@@ -59,6 +62,9 @@ misled about the current state?* If yes, fix the docs.
 - **API types are declared once**, in `backend/src/Reckon/Api/Types.hs` with
   `deriveJSONAndTypeScript`, and added to `typeScriptDeclarations`. Run
   `make codegen`. Never hand-write an API type in TypeScript.
+- **API security (D061):** the server is login-less, so it binds loopback and runs behind
+  `hostGuard` and `jsonOnlyWrites` (`Reckon.Security`). Don't bypass them, don't add a route
+  that returns data without going through `Server.application`, and don't widen the bind.
 - **JSON:** record fields go over the wire verbatim (camelCase). Enums use
   `enumOptions "<Prefix>"` and become snake_case strings.
 - **Haskell style:** GHC2024 plus `OverloadedRecordDot`, `DuplicateRecordFields`
@@ -66,11 +72,17 @@ misled about the current state?* If yes, fix the docs.
   / `anyclass` explicitly. Qualified imports for containers and text
   (`import Data.Text qualified as Text`). Keep pure logic separate from IO so
   it can be tested without a database.
+- **Frontend:** strict TypeScript; types only from `generated.ts`; money is integer cents and
+  goes to and from text only through `lib/money.ts`; every action uses `useAction` (it
+  invalidates all queries); pages show the server's own `problem`/`message` text verbatim.
 - **Tests:** hspec for examples, hedgehog for properties (from Phase 1).
   Database tests use `TEST_DATABASE_URL` and fail, not skip, without it.
   Tests never call the real Claude API.
 - **Warnings:** the cabal file enables a strict warning set. CI builds with
-  `-Werror`.
+  `-Werror`. GHC doesn't recompile a module when only warning flags change, so `make check` builds in
+  its own directory (`backend/dist-newstyle-werror`) that only ever holds `-Werror` objects. A plain
+  `cabal build --ghc-options=-Werror` in `dist-newstyle` can pass on cached objects and hide warnings
+  that CI's clean build will reject.
 
 ## Privacy rules (non-negotiable)
 
@@ -87,11 +99,18 @@ Full version: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ```bash
 make dev        # Postgres + migrations + API (:8080) + frontend (:5173)
+make demo       # the same, on fake data in its own database (reckon_demo); nothing real is touched
 make test       # backend tests against reckon_test
 make check      # everything CI runs, run before pushing
 make codegen    # after changing backend/src/Reckon/Api/Types.hs
 make migration name=...   # new SQL migration; then `make migrate`
 make import file=private/export.csv   # import a real RBC CSV
+make post       # post imported rows to the journal
+make reconcile  # compare the ledger with every recorded statement balance
+make owed       # what friends owe you
+make provisional  # rows read from screenshots that no bank CSV has confirmed yet
+cd frontend && npm test   # frontend tests (also part of make check)
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (run-checks, reminders, add-due-date, post-row, recategorize, add-rule, rules, check-rule, apply-rule, delete-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -140,3 +159,74 @@ docs/        see the table above
   `IncomingRow`) can't use record-update syntax. Build with the constructor.
 - `OverloadedRecordDot` needs the record's fields in scope: import
   `AppEnv (..)`, not just `AppEnv`, to use `env.databasePool`.
+- `postPendingRows` posts **every** unposted row in the database, and rules
+  are global. Posting tests use a `Scenario` (PostingSpec): unique account
+  numbers, a unique year (so pairing windows never overlap another test's
+  rows) and a unique description tag for rules. Assert only on the
+  scenario's own rows (DECISIONS D047).
+- `hostGuard` reads Warp's `requestHeaderHost`, falling back to the `Host` header, because
+  `Network.Wai.Test` requests built by hand set only the header. A guard test must also run over
+  a real socket (`testWithApplication`, as ApiSpec does), and Servant already answers 415 for
+  routes with a JSON `ReqBody`, so test `jsonOnlyWrites` on a bare `Application`.
+- API handlers get their wording from `Reckon.Messages`, the same module the CLI uses. Add a
+  refusal there, once, and map it to a status in `Server.hs` (`refuse`).
+- Frontend component tests use `fakeBackend` (`src/testing.tsx`): it answers `"METHOD /path"`
+  from a table and fails the test on an unexpected request. Assert on the JSON a form sent, not
+  just on what the page showed afterwards.
+- Rules are global, like people, and `postPendingRows` posts every unposted row, so a rule in a test
+  must only match its own scenario's rows: put the scenario's tag in the description text it
+  matches (`bistro scenario` in RulesSpec) and in its account and friend names.
+- `Classify.Rule` is the planner's *resolved* rule (account ids, `Outcome`); `Rules.Language.Rule` is
+  what the text says (account names). `Rules.loadRules` turns one into the other. Tests of the pure
+  planner build `Classify.Rule` directly (`containsRule` for the simple case).
+- The job queue is a global singleton (one pending `run_checks` job in the whole database, by a unique
+  index), so a queue test starts with `clearQueue` (JobsSpec) and passes its own clock. The test
+  environment's connection pool has **one** connection: a test that needs two workers builds its own pool
+  (`createDatabasePool url 2`), and runs the second worker on a thread so a missing lock fails the test
+  instead of hanging it.
+- Anything that depends on "today" reads `env.currentTime` (D072), because every scenario lives in a
+  made-up future year. Tests that need a date set it: `env {currentTime = pure (UTCTime day 0)}`.
+- **The demo must keep working and keep matching its README.** `scripts/seed-demo.sh` asserts what
+  `fixtures/demo/README.md` promises and runs in `make check` (`scripts/demo.sh --check`). If a change to
+  posting, matching or reconciliation alters an outcome, fix the code or deliberately update the README and the
+  `expect` lines together. Fake merchants each have their own invented name: a shared word makes the pending-hold matcher
+  (D057) match unrelated rows.
+- Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
+  and IO in their callers. Pure planners are generic in their id and
+  account types so tests can use `Int` and `Text`.
+- A row is "posted" when it has a `journal_entry_evidence` link to an entry
+  that isn't reversed. There's no status column; don't add one. Correct a
+  posting by reversing it, dated like the original, then posting again.
+- Replace a posted row's entry only through `Posting.repostRow` (reverse
+  dated like the original, then post). It refuses rows whose entry touches
+  `asset:clearing`. Anything that can refuse must validate *before* it writes.
+- `people` (name, `match_text`) is global like rules. Tests that add people
+  derive names and match texts from the scenario's tag (SharingSpec), and the
+  planner takes people as an argument so its tests need no database.
+- Shared test helpers (`Scenario`, `importCsv`, `entryLinesForRow`, ...) live in
+  `test/Reckon/ScenarioSupport.hs`. `postPendingRows` posts every unposted
+  row, so a test must only assert on its own scenario's rows.
+- **Never call the real Claude API from a test.** `Reckon.Anthropic.Extractor` is a function
+  (image -> the model's reply text): tests pass fakes (`scripted` in ScreenshotSpec), recorded
+  fake replies from `fixtures/screenshots`, or the in-process stub in AnthropicSpec. The key is an
+  `ApiKey` whose `Show` is redacted: keep it that way, and build errors from the response, not the
+  request.
+- Everything the model says is untrusted until `Screenshot.Extraction.parseExtraction` accepts it.
+  Do arithmetic, years and signs in code, not in the prompt. A new field means changing the schema,
+  the prompt, `parseRawRow`, the fixtures and the spec together.
+- A screenshot row is "open" until it has a `provisional_resolutions` row. Resolve one only by
+  reversing its entry dated like the original (`reverseEntryOf`), never by editing. The
+  reconciliation identity includes open provisional rows (DECISIONS D059).
+- `-Wpartial-fields` rejects record fields on only some constructors of a sum type. Put the record
+  in its own type (`Imported ImportedScreenshots`).
+- GHC 9.10's Prelude exports `foldl'`: importing it from `Data.List` is a redundant-import error
+  under `-Werror`.
+- Statement balances and opening balances are entered in the **natural**
+  sign (money in chequing, money owed on a card). Convert with
+  `naturalBalance` at the edges; the ledger stores raw debits (+) and
+  credits (−).
+- `make migrate` rewrites `db/schema.sql` (and so do `make test`, `make check` and `make dev`, which run it).
+  Check `git diff db/schema.sql` right before every commit, not just after the migration you wrote. A newer Postgres patch release can
+  add noise to that dump (`ALTER TABLE ... SET (pg_attver=...)` lines, a
+  changed "Dumped from database version" comment). Strip it before committing
+  so the diff shows only the real schema change.

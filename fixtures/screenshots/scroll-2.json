@@ -1,0 +1,10 @@
+{
+  "accountLabel": "Chequing",
+  "transactions": [
+    {"dateText": "Feb 18", "description": "COFFEE CO", "amountText": "-$4.50", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 17", "description": "CORNER GROCERY", "amountText": "-$42.17", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 16", "description": "EXAMPLE HYDRO", "amountText": "-$85.40", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 15", "description": "E-TRANSFER SENT ALEX EXAMPLE", "amountText": "-$30.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": false, "partial": false},
+    {"dateText": "Feb 14", "description": "RENT TRANSFER", "amountText": "-$1,200.00", "direction": "debit", "section": "posted", "runningBalanceText": null, "uncertain": true, "partial": false}
+  ]
+}

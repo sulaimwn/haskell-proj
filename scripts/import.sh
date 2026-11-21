@@ -19,9 +19,4 @@ case "$file" in
   *) log "Note: real exports belong in private/ so they can never be committed (docs/PRIVACY.md)" ;;
 esac
 
-load_env
-scripts/migrate.sh >/dev/null
-
-(cd backend && cabal build -v0 exe:reckon-cli)
-cli_binary="$(cd backend && cabal list-bin exe:reckon-cli)"
-"$cli_binary" import-rbc-csv "$file"
+exec scripts/reckon.sh import-rbc-csv "$file"
