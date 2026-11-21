@@ -188,34 +188,6 @@ ALTER TABLE public.bank_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
--- Name: categorization_rules; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.categorization_rules (
-    id bigint NOT NULL,
-    description_contains text NOT NULL,
-    ledger_account_id bigint NOT NULL,
-    priority integer DEFAULT 100 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT categorization_rules_description_contains_check CHECK (((description_contains <> ''::text) AND (description_contains = upper(description_contains))))
-);
-
-
---
--- Name: categorization_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.categorization_rules ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.categorization_rules_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
-);
-
-
---
 -- Name: import_batch_coverage; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -431,6 +403,33 @@ ALTER TABLE public.people ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
+-- Name: posting_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.posting_rules (
+    id bigint NOT NULL,
+    rule_text text NOT NULL,
+    priority integer DEFAULT 100 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT posting_rules_rule_text_check CHECK ((btrim(rule_text) <> ''::text))
+);
+
+
+--
+-- Name: posting_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.posting_rules ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.posting_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: provisional_resolutions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -621,22 +620,6 @@ ALTER TABLE ONLY public.bank_accounts
 
 
 --
--- Name: categorization_rules categorization_rules_description_contains_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.categorization_rules
-    ADD CONSTRAINT categorization_rules_description_contains_key UNIQUE (description_contains);
-
-
---
--- Name: categorization_rules categorization_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.categorization_rules
-    ADD CONSTRAINT categorization_rules_pkey PRIMARY KEY (id);
-
-
---
 -- Name: import_batch_coverage import_batch_coverage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -754,6 +737,22 @@ ALTER TABLE ONLY public.people
 
 ALTER TABLE ONLY public.people
     ADD CONSTRAINT people_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: posting_rules posting_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posting_rules
+    ADD CONSTRAINT posting_rules_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: posting_rules posting_rules_rule_text_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.posting_rules
+    ADD CONSTRAINT posting_rules_rule_text_key UNIQUE (rule_text);
 
 
 --
@@ -1058,14 +1057,6 @@ ALTER TABLE ONLY public.bank_accounts
 
 
 --
--- Name: categorization_rules categorization_rules_ledger_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.categorization_rules
-    ADD CONSTRAINT categorization_rules_ledger_account_id_fkey FOREIGN KEY (ledger_account_id) REFERENCES public.ledger_accounts(id);
-
-
---
 -- Name: import_batch_coverage import_batch_coverage_bank_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1281,4 +1272,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260923120000'),
     ('20260924090000'),
     ('20260925090000'),
-    ('20260926090000');
+    ('20260926090000'),
+    ('20260927090000');

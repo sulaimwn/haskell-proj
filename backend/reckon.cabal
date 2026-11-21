@@ -49,6 +49,10 @@ library
     Reckon.Reconcile
     Reckon.Reconcile.Explain
     Reckon.Report
+    Reckon.Rules
+    Reckon.Rules.Eval
+    Reckon.Rules.History
+    Reckon.Rules.Language
     Reckon.Screenshot.Align
     Reckon.Screenshot.Eval
     Reckon.Screenshot.Extraction
@@ -81,6 +85,7 @@ library
     , http-client-tls
     , http-types
     , monad-logger
+    , megaparsec
     , mtl
     , persistent
     , persistent-postgresql
@@ -145,6 +150,8 @@ test-suite reckon-test
     Reckon.Posting.SplitSpec
     Reckon.PostingSpec
     Reckon.Reconcile.ExplainSpec
+    Reckon.Rules.LanguageSpec
+    Reckon.RulesSpec
     Reckon.ScenarioSupport
     Reckon.ScreenshotSpec
     Reckon.Screenshot.AlignSpec

@@ -95,11 +95,10 @@ JournalEntryEvidence sql=journal_entry_evidence
   Primary entryId rawBankRowId
   deriving Show Eq
 
-CategorizationRule sql=categorization_rules
-  descriptionContains Text
-  ledgerAccountId LedgerAccountId
+PostingRule sql=posting_rules
+  ruleText Text
   priority Int
-  UniqueCategorizationRule descriptionContains
+  UniquePostingRule ruleText
   deriving Show Eq
 
 StatementCheckpoint sql=statement_checkpoints

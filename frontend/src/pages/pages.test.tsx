@@ -1,9 +1,10 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import type { AccountSummary, ReviewQueue } from '../api/generated'
+import type { AccountSummary, ReviewQueue, RuleCheck } from '../api/generated'
 import { fakeBackend, renderWithQueries } from '../testing'
 import { AccountsPage } from './AccountsPage'
 import { ReviewPage } from './ReviewPage'
+import { RulesPage } from './RulesPage'
 import { ImportPage } from './ImportPage'
 import { SpendingPage } from './SpendingPage'
 import { TransactionsPage } from './TransactionsPage'
@@ -197,5 +198,95 @@ describe('the import page', () => {
     const body = calls.find((call) => call.method === 'POST')?.body as { file: { fileName: string; contentBase64: string } }
     expect(body.file.fileName).toBe('export.csv')
     expect(atob(body.file.contentBase64)).toBe('a,b\n1,2\n')
+  })
+})
+
+describe('the rules page', () => {
+  const source = 'when description contains "bistro" and amount < 0 then categorize expense:food'
+  const goodCheck: RuleCheck = {
+    problem: null,
+    canonicalText: 'when description contains "BISTRO" and amount < 0.00 then categorize expense:food',
+    preview: {
+      matched: 3,
+      wouldMove: 2,
+      alreadyThere: 0,
+      onNextPost: 1,
+      cannotChange: 0,
+      rows: [
+        { rowId: 2, date: '2026-02-05', description: 'Interac purchase - TASTY BISTRO', amountCents: -1200, effect: 'move', detail: 'expense:uncategorized' },
+        { rowId: 1, date: '2026-02-03', description: 'Interac purchase - TASTY BISTRO', amountCents: -3001, effect: 'move', detail: 'expense:uncategorized' },
+        { rowId: 4, date: '2026-02-20', description: 'Interac purchase - TASTY BISTRO', amountCents: -500, effect: 'on_next_post', detail: null },
+      ],
+    },
+  }
+  const badCheck: RuleCheck = {
+    problem: { line: 1, column: 15, message: 'amounts have at most two decimals, like 12.50' },
+    canonicalText: null,
+    preview: null,
+  }
+
+  it('lists the rules in order, flagging one that no longer reads', async () => {
+    fakeBackend({
+      'GET /api/rules': [
+        { ruleId: 1, ruleText: 'when description contains "HYDRO" then categorize expense:utilities', priority: 50, problem: null },
+        { ruleId: 2, ruleText: 'when the moon is full', priority: 100, problem: 'line 1, column 6: expected a condition' },
+      ],
+    })
+    renderWithQueries(<RulesPage />)
+    expect(await screen.findByText('when description contains "HYDRO" then categorize expense:utilities')).toBeTruthy()
+    expect(screen.getByText(/no longer reads as a rule/)).toBeTruthy()
+  })
+
+  it('points at the mistake as the rule is typed, and keeps Save off', async () => {
+    const calls = fakeBackend({ 'GET /api/rules': [], 'POST /api/rules/check': badCheck })
+    renderWithQueries(<RulesPage />)
+    fireEvent.change(await screen.findByLabelText('Rule'), { target: { value: 'when amount < 1.234 then categorize expense:x' } })
+    expect(await screen.findByText('Line 1, column 15: amounts have at most two decimals, like 12.50')).toBeTruthy()
+    expect(document.querySelector('.rule-caret')?.textContent).toBe('when amount < 1.234 then categorize expense:x\n              ^')
+    expect((screen.getByRole('button', { name: 'Save rule' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(calls.filter((call) => call.method === 'POST' && call.url === '/api/rules')).toHaveLength(0)
+  })
+
+  it('previews what a good rule would do, then saves exactly what was typed', async () => {
+    const calls = fakeBackend({
+      'GET /api/rules': [],
+      'POST /api/rules/check': goodCheck,
+      'POST /api/rules': { message: 'Saved the rule.', details: [] },
+    })
+    renderWithQueries(<RulesPage />)
+    fireEvent.change(await screen.findByLabelText('Rule'), { target: { value: source } })
+    expect(await screen.findByText(/3 imported rows match\./)).toBeTruthy()
+    expect(screen.getAllByText('Moves from expense:uncategorized')).toHaveLength(2)
+    expect(screen.getByText('Applied when it is posted')).toBeTruthy()
+    expect(screen.getByText('when description contains "BISTRO" and amount < 0.00 then categorize expense:food')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save rule' }))
+    expect(await screen.findByText('Saved the rule.')).toBeTruthy()
+    expect(calls.find((call) => call.method === 'POST' && call.url === '/api/rules')?.body).toEqual({ ruleText: source, priority: 100 })
+  })
+
+  it('can save and then move the posted rows it matches', async () => {
+    const calls = fakeBackend({
+      'GET /api/rules': [],
+      'POST /api/rules/check': goodCheck,
+      'POST /api/rules': { message: 'Saved the rule.', details: [] },
+      'POST /api/rules/apply': { message: 'Moved 2 rows.', details: [] },
+    })
+    renderWithQueries(<RulesPage />)
+    fireEvent.change(await screen.findByLabelText('Rule'), { target: { value: source } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and move 2 posted rows' }))
+    expect(await screen.findByText('Saved the rule. Moved 2 rows.')).toBeTruthy()
+    expect(calls.filter((call) => call.method === 'POST' && call.url !== '/api/rules/check').map((call) => call.url)).toEqual(['/api/rules', '/api/rules/apply'])
+    expect(calls.find((call) => call.url === '/api/rules/apply')?.body).toEqual({ ruleText: source })
+  })
+
+  it('refuses a priority that is not a whole number without asking the server', async () => {
+    fakeBackend({ 'GET /api/rules': [], 'POST /api/rules/check': goodCheck })
+    renderWithQueries(<RulesPage />)
+    fireEvent.change(await screen.findByLabelText('Rule'), { target: { value: source } })
+    await screen.findByText(/3 imported rows match\./)
+    fireEvent.change(screen.getByLabelText(/Priority/), { target: { value: '1.5' } })
+    expect(screen.getByText('Priority must be a whole number.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save rule' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

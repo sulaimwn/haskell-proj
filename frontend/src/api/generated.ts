@@ -202,9 +202,69 @@ export interface IAddPersonRequest {
 export type AddRuleRequest = IAddRuleRequest;
 
 export interface IAddRuleRequest {
-  descriptionContains: string;
-  account: string;
+  ruleText: string;
   priority: number | null;
+}
+
+export type RuleView = IRuleView;
+
+export interface IRuleView {
+  ruleId: number;
+  ruleText: string;
+  priority: number;
+  problem: string | null;
+}
+
+export type RuleProblemView = IRuleProblemView;
+
+export interface IRuleProblemView {
+  line: number;
+  column: number;
+  message: string;
+}
+
+export type PreviewEffectKind = "move" | "already_there" | "on_next_post" | "cannot_change";
+
+export type PreviewRowView = IPreviewRowView;
+
+export interface IPreviewRowView {
+  rowId: number;
+  date: string;
+  description: string;
+  amountCents: number;
+  effect: PreviewEffectKind;
+  detail: string | null;
+}
+
+export type RulePreviewView = IRulePreviewView;
+
+export interface IRulePreviewView {
+  matched: number;
+  wouldMove: number;
+  alreadyThere: number;
+  onNextPost: number;
+  cannotChange: number;
+  rows: PreviewRowView[];
+}
+
+export type CheckRuleRequest = ICheckRuleRequest;
+
+export interface ICheckRuleRequest {
+  ruleText: string;
+}
+
+export type RuleCheck = IRuleCheck;
+
+export interface IRuleCheck {
+  problem: RuleProblemView | null;
+  canonicalText: string | null;
+  preview: RulePreviewView | null;
+}
+
+export type ApplyRuleRequest = IApplyRuleRequest;
+
+export interface IApplyRuleRequest {
+  ruleText: string;
 }
 
 export type BalanceRequest = IBalanceRequest;

@@ -9,13 +9,17 @@ import type {
   AddPersonRequest,
   AddRuleRequest,
   ApiProblem,
+  ApplyRuleRequest,
   BalanceRequest,
+  CheckRuleRequest,
   HealthResponse,
   ImportCsvRequest,
   ImportScreenshotsRequest,
   LedgerAccountView,
   ReceivablesResponse,
   ReviewQueue,
+  RuleCheck,
+  RuleView,
   SettleRequest,
   SpendingMonth,
   SplitRequest,
@@ -113,6 +117,7 @@ export const api = {
   getReceivables: (asOf?: string) => getJson<ReceivablesResponse>('/api/receivables', { asOf }),
   getReview: () => getJson<ReviewQueue>('/api/review'),
   getLedgerAccounts: () => getJson<LedgerAccountView[]>('/api/ledger-accounts'),
+  getRules: () => getJson<RuleView[]>('/api/rules'),
 
   importCsv: (request: ImportCsvRequest) => postJson<ActionResult>('/api/imports/csv', request),
   importScreenshots: (request: ImportScreenshotsRequest) => postJson<ActionResult>('/api/imports/screenshots', request),
@@ -125,6 +130,10 @@ export const api = {
 
   addPerson: (request: AddPersonRequest) => postJson<ActionResult>('/api/people', request),
   addRule: (request: AddRuleRequest) => postJson<ActionResult>('/api/rules', request),
+  /** Reads and previews a rule without saving it. A bad rule is a normal answer, with where it went wrong. */
+  checkRule: (request: CheckRuleRequest) => postJson<RuleCheck>('/api/rules/check', request),
+  applyRule: (request: ApplyRuleRequest) => postJson<ActionResult>('/api/rules/apply', request),
+  deleteRule: (ruleId: number) => postJson<ActionResult>(`/api/rules/${ruleId}/delete`, {}),
   setOpeningBalance: (last4: string, request: BalanceRequest) =>
     postJson<ActionResult>(`/api/accounts/${enc(last4)}/opening-balance`, request),
   addCheckpoint: (last4: string, request: BalanceRequest) => postJson<ActionResult>(`/api/accounts/${enc(last4)}/checkpoints`, request),

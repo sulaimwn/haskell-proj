@@ -3,6 +3,7 @@ module Reckon.Ledger.AccountType
   ( AccountType (..)
   , accountTypeToText
   , accountTypeFromText
+  , accountTypeFromName
   , naturalBalance
   ) where
 
@@ -57,3 +58,15 @@ naturalBalance accountType rawBalance = case accountType of
   Liability -> negateCents rawBalance
   Income -> negateCents rawBalance
   Equity -> negateCents rawBalance
+
+-- | The account type implied by a name's prefix: @expense:food@ is an
+-- expense, @receivable:alex@ is an asset (money owed to me).
+accountTypeFromName :: Text -> Maybe AccountType
+accountTypeFromName name = case Text.takeWhile (/= ':') name of
+  "asset" -> Just Asset
+  "receivable" -> Just Asset
+  "liability" -> Just Liability
+  "income" -> Just Income
+  "expense" -> Just Expense
+  "equity" -> Just Equity
+  _ -> Nothing

@@ -7,6 +7,7 @@ export type Route =
   | { page: 'spending' }
   | { page: 'receivables' }
   | { page: 'review' }
+  | { page: 'rules' }
   | { page: 'import' }
 
 export const pageTitles: Record<Route['page'], string> = {
@@ -15,6 +16,7 @@ export const pageTitles: Record<Route['page'], string> = {
   spending: 'Spending',
   receivables: 'Receivables',
   review: 'Review',
+  rules: 'Rules',
   import: 'Import',
 }
 
@@ -27,6 +29,7 @@ export function parseRoute(hash: string): Route {
     case 'spending':
     case 'receivables':
     case 'review':
+    case 'rules':
     case 'import':
       return { page }
     default:

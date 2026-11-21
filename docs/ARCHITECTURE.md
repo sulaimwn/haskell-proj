@@ -60,6 +60,10 @@ backend/
     People.hs             DB: people I share costs with, their receivable accounts, who owes what
     Sharing.hs            DB: splitRow (replace a row's entry with a split one)
     Report.hs             DB: spending by expense account (my share only)
+    Rules/Language.hs     pure: the rule language: AST, megaparsec parser with line/column errors, renderer
+    Rules/Eval.hs         pure: does a rule hold for a row (description, amount, kind of account)?
+    Rules.hs              DB: save, check, delete rules (stored as canonical text); resolve them into the planner's Rule type
+    Rules/History.hs      DB + pure: preview a rule against rows already imported, and apply it to the posted ones
     Anthropic.hs          the Claude Messages API client (raw HTTP): request builder, response parser, retries, redacted key
     Screenshot/Extraction.hs  pure: the schema and prompt sent to the model; strict validation of its reply; dates, years and amounts
     Screenshot/Align.hs   pure: joining overlapping screenshots of one scroll
@@ -76,7 +80,7 @@ backend/
 frontend/
   src/api/generated.ts    GENERATED from backend Api/Types.hs. Do not edit.
   src/api/client.ts       typed fetch wrappers, one per endpoint (+ ApiError, file -> base64)
-  src/pages/              one component per screen: Accounts, Transactions, Spending, Receivables, Review, Import
+  src/pages/              one component per screen: Accounts, Transactions, Spending, Receivables, Review, Rules, Import
   src/components/         shared pieces: Money, Notice, QueryState, forms, HealthBadge
   src/lib/                pure logic with tests: money.ts, route.ts, months.ts, bars.ts, plural.ts; hooks: useAction, useHashRoute
   src/testing.tsx         fake `fetch` and a render helper for component tests
@@ -105,7 +109,10 @@ into TypeScript.
 | `POST /api/imports/csv`, `/api/imports/screenshots` | import; files are base64 in JSON (D062) | `Import`, `Screenshot.Import` |
 | `POST /api/post` | post every unposted row | `Posting.postPendingRows` |
 | `POST /api/rows/:id/{settle,recategorize,split}`, `/api/provisional/:id/release` | the CLI's `post-row`, `recategorize`, `split-row`, `release-provisional` | `Posting`, `Sharing`, `Screenshot.Store` |
-| `POST /api/people`, `/api/rules`, `/api/accounts/:last4/{opening-balance,checkpoints}` | add a friend or rule; record balances (a checkpoint's result carries the reconciliation report) | `People`, `Posting`, `Reconcile` |
+| `POST /api/people`, `/api/accounts/:last4/{opening-balance,checkpoints}` | add a friend; record balances (a checkpoint's result carries the reconciliation report) | `People`, `Reconcile` |
+| `GET /api/rules`, `POST /api/rules`, `/api/rules/:id/delete` | list, save and delete rules (saving validates first: 422 with the line and column) | `Rules` |
+| `POST /api/rules/check` | reads a rule and previews it against existing rows, **without saving**. A bad rule is a normal 200 answer with `problem {line, column, message}`, because the page calls it as you type | `Rules.checkRule`, `Rules.History.previewRule` |
+| `POST /api/rules/apply` | moves the posted rows the rule would move | `Rules.History.applyRule` |
 
 Reads are plain queries. Actions return `{message, details}`, the same
 sentences the CLI prints (`Reckon.Messages`). A refusal is `{problem}`
@@ -274,7 +281,7 @@ the negated amount on a **counter account** chosen by the planner:
 |---|---|---|
 | Half of a cancelled or refunded pair | `asset:clearing` | Same account, opposite amounts, within 45 days, one says CANCEL/REVERS/RETURN/DECLIN/REFUND. Checked first. |
 | One leg of a transfer between my accounts | `asset:clearing` | Different accounts, opposite amounts, within 5 days |
-| Matched by a categorization rule | the rule's account | First rule (by priority) whose text appears in the descriptions |
+| Matched by a rule (the rule language, D067) | the rule's account, or a split with friends | First rule (by priority) whose conditions all hold |
 | Payment to a card reckon doesn't track | `liability:untracked-cards` | Money leaving a non-card account, "PAYMENT"/"PMT" plus a card name |
 | Anything else | `expense:uncategorized` / `income:uncategorized` | By sign |
 | Zero amount, or a pair that isn't unambiguous | *not posted*, left for review | Listed by `make post` with the row id |
@@ -336,7 +343,7 @@ reports RECONCILED. `PostingSpec` runs exactly this.
 | Table | Holds | Mutable? |
 |---|---|---|
 | `journal_entry_evidence` | which raw bank row each posted entry came from (PK: entry, row) | append-only |
-| `categorization_rules` | "description contains TEXT → account", with priority (TEXT stored upper-case, UNIQUE) | editable (configuration) |
+| `posting_rules` | one rule per row as text in the rule language, in canonical form (UNIQUE), with priority. Replaced `categorization_rules` in Phase 7 (D068) | editable and deletable (configuration) |
 | `statement_checkpoints` | a statement's closing balance for an account and date (UNIQUE per account and date), as the statement shows it | append-only |
 | `opening_balances` | which journal entry is an account's opening balance, and its date | append-only; replaced by reversing the entry |
 
@@ -450,6 +457,40 @@ payroll, two coffees, grocery, hydro, an e-Transfer). The rent row the model was
 and not posted. When the bank's CSV arrives with the hold posted for $43.20, `make post` matches all
 eight, reverses the seven entries, and posts the CSV rows: the ledger is exactly the CSV's.
 
+## Rules (Phase 7)
+
+A rule says where a bank row goes (D067). It is one line of text:
+
+```
+when description contains "TIM HORTONS" then categorize expense:coffee
+when description starts with "UBER" and amount < -50.00 then categorize expense:transport
+when description contains "DINNER" and account is credit card then split expense:food equally with alex, sam
+```
+
+```
+ text ──parseRule──► Rule ──checkRule (friends exist?)──► renderRule ──► posting_rules.rule_text
+                                                                          │ (canonical text; UNIQUE)
+ posting:   loadRules ─ parse each stored text, look up accounts ─► Classify.Rule ─► planPosting
+ preview:   loadHistory ─► previewRule (pure) ─► what each existing row would do   (nothing written)
+ apply:     previewRule ─► for each "would move" row: recategorizeRow / splitRow   (reverse dated like the original, then post)
+```
+
+- **The language is pure** (`Rules.Language`): `parseRule`, `renderRule`, and `RuleProblem`.
+  Mistakes are reported at the offending token. Round trip: `parseRule (renderRule r) == Right r`.
+- **The database holds only the text.** There is no structured copy of a rule, so nothing can drift
+  from it: posting, previewing and the Rules page all parse the stored text (D068). It is stored in
+  canonical form, so the same rule written two ways is one row.
+- **The planner uses a resolved `Classify.Rule`** (`label`, `conditions`, `outcome`), whose accounts
+  are ids. An `Outcome` is `ToAccount` or `SplitWith`; a split posts one entry with a line per
+  participant (`SplitByRule`), computed by `equalSplit`, so my share is the remainder (D049).
+  A rule that matches but can't be carried out (a split of money in, an unknown friend, a share
+  under a cent) is passed over and the next rule or the guess decides.
+- **History** (`Rules.History`): `previewRule` (pure) classifies every existing row as *moves from X*,
+  *already there*, *applies when posted*, or *can't change* (transfer legs, cancelled pairs, splits);
+  `applyRule` moves exactly the *moves* rows through the same reverse-and-repost as `recategorize`,
+  so no balance changes on any date (D069). It is a separate, explicit step: saving a rule never
+  rewrites the past.
+
 ## Invariants
 
 This section grows every phase. Each invariant lists how it is enforced.
@@ -490,6 +531,10 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Screenshot evidence is never modified | append-only triggers + raw-SQL tests | Phase 5 |
 | Only the owner's own browser can read or change the ledger through the API | loopback bind (`RECKON_HOST`), `hostGuard` (403 for any other `Host`), `jsonOnlyWrites` (415 for anything but JSON); tests over a real Warp socket and on the middleware alone; mutation checks | Phase 6 |
 | The UI never shows or sends a money amount that isn't an exact number of cents | integer cents on the wire; `formatCents` / `parseAmountToCents` (refuses more than two decimals), tested over 20,000 values and the refusals; a mutation check that parsing "1.234" fails tests | Phase 6 |
+| A saved rule always parses, and is stored in one canonical form | `addRule` parses, validates (friends exist) and stores `renderRule`; `UNIQUE (rule_text)` + `CHECK` (raw-SQL test); property `parse . render == id`; a duplicate differing only in case or spacing is refused | Phase 7 |
+| A rule that stops parsing never stops posting | `loadRules` skips it; test with a broken row inserted by raw SQL | Phase 7 |
+| A rule never rewrites the past unless asked, and applying it changes no balance on any date | `previewRule` is read-only; `applyRule` reuses `repostRow` (reversal dated like the original); test compares the account's balance on every day before and after; mutation check | Phase 7 |
+| A rule's split parts add up to the payment exactly | `equalSplit` → `BalancedLines` + deferred trigger; property over amounts | Phase 7 |
 | Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI

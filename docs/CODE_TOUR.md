@@ -25,6 +25,7 @@ This grows with every phase. Every new module gets a section.
 - [Posting and reconciliation (Phase 3)](#posting-and-reconciliation-phase-3)
 - [Shared expenses (Phase 4)](#shared-expenses-phase-4)
 - [Reading screenshots with Claude (Phase 5)](#reading-screenshots-with-claude-phase-5)
+- [The rule language (Phase 7)](#the-rule-language-phase-7)
 - [The HTTP API and the screens (Phase 6)](#the-http-api-and-the-screens-phase-6)
 - [The frontend (Phase 6)](#the-frontend-phase-6)
 - [Tests](#tests)
@@ -40,7 +41,7 @@ This grows with every phase. Every new module gets a section.
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
-| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4); `import-screenshots`, `provisional`, `release-provisional`, `eval-screenshots` (Phase 5). |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4); `import-screenshots`, `provisional`, `release-provisional`, `eval-screenshots` (Phase 5); `rules`, `check-rule`, `apply-rule`, `delete-rule` and the rule-language form of `add-rule` (Phase 7). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -988,6 +989,119 @@ command prints, including a warning per alignment problem.
 
 `scripts/reckon.sh import-screenshots LAST4 [--taken DATE] FILE...`, `provisional`,
 `release-provisional ID` and `eval-screenshots DIR` are the new commands.
+
+---
+
+## The rule language (Phase 7)
+
+Design: D067-D069. Rules were "description contains TEXT"; now a rule is a line of a tiny language, with
+errors that say where, a preview against existing rows, and an explicit way to apply it to the past.
+
+### `Reckon.Rules.Language`: a parser, a renderer, and errors with positions
+
+```haskell
+data Rule = Rule { conditions :: NonEmpty Condition, action :: Action }
+parseRule  :: Text -> Either RuleProblem Rule
+renderRule :: Rule -> Text
+```
+
+- **`NonEmpty Condition`** makes "a rule with no conditions" unrepresentable: it would match every row.
+  The parser builds it with `(:|) <$> condition <*> many (keyword "and" *> condition)`.
+- **megaparsec** (`Parsec Void Text`). `lexeme` / `symbol` (from `Text.Megaparsec.Char.Lexer`) wrap a
+  parser so it also eats trailing whitespace, so no rule mentions whitespace except the quoted text.
+  `keyword` is `try (string' word <* notFollowedBy wordChar)`: case-insensitive, and `contain` is not
+  `contains`. `try` matters: megaparsec's `<|>` only tries the second alternative if the first
+  consumed no input, and a keyword that matched half a word has consumed some. `<?> "label"` replaces a
+  pile of "expected 'c', 'a', ..." with "expected a condition".
+- **Errors at the right place.** `failAt offset message = parseError (FancyError offset (Set.singleton
+  (ErrorFail message)))` reports a custom problem at an earlier offset: the *start* of the amount, not
+  the character after its third decimal. `problemFrom` turns the bundle into `RuleProblem {line, column,
+  message}` with `reachOffset` (megaparsec computes the source position for an offset).
+- **Semantic checks live in the parser** where they need no database: a third decimal, an account with no
+  known type (`accountTypeFromName`, moved to the pure `AccountType` module so this module can use it),
+  a split into a non-expense account, a friend named twice (`firstRepeat`, over `(offset, name)` pairs so
+  the error lands on the second mention). Whether a friend *exists* needs the database; `Rules.checkRule`
+  asks, and uses `problemAt` to find the name in the source and report line and column.
+- **Exact amounts.** `amountParser` reads digits (with commas) and at most two decimals into an `Integer`
+  of cents, rejects anything over $10^13, and builds `Cents`. There is no `Double` anywhere.
+- **Renderer and the round-trip property.** `renderRule` writes the canonical form; the hedgehog property
+  `parseRule (renderRule r) === Right r` runs over generated rules including quotes, backslashes and
+  non-ASCII in the text. Writing the generator exposed the normalization rule: description text is kept
+  upper-case with single spaces (`normalizeDescription`), so the generator normalizes too.
+
+**Q: Why a parser combinator library rather than a regex or splitting on spaces?**
+A: The grammar has quoted text with escapes, comparison operators, and a comma-separated list, and the
+requirement is good errors, not just success. A combinator parser *is* the grammar (the code reads like it),
+composes (`many (keyword "and" *> condition)`), and gets error recovery and positions for free. Splitting
+on spaces would mis-handle `"TIM HORTONS"` and could never say "column 15".
+
+**Q: What does `try` do, and why is it needed here?**
+A: In megaparsec an alternative that fails *after consuming input* fails the whole choice, to give precise
+errors and avoid exponential backtracking. `try p` pretends `p` consumed nothing if it fails. `keyword`
+needs it because `string' "contains"` can match `contain` and then fail on the missing `s`: without `try`
+the next alternative (`starts with`) would never be tried.
+
+### `Reckon.Rules.Eval`: evaluation is a few lines
+
+`holds :: Candidate -> Condition -> Bool` is one `case`. `Candidate` is what a rule can see (description,
+amount, kind of account); the planner builds one from an `EvidenceRow`. Keeping evaluation separate from the
+language means a new condition is a constructor, a parser case, a renderer case, and an evaluator case, and
+the compiler's incomplete-pattern warning (an error under `-Werror`) finds any one you forgot.
+
+### `Reckon.Posting.Classify`: `Rule`, `Outcome`, and a rule that can't apply
+
+`Classify.Rule` is the *resolved* rule: `label`, `conditions`, and an `Outcome` (`ToAccount account` or
+`SplitWith account friends`), with account ids from the database. The planner's rule step is
+`mapMaybe (applyRule row) rules`, taking the first success. `applyRule` is in the `Maybe` monad:
+
+```haskell
+SplitWith account friends -> do
+  friendAccounts <- Map.fromList . zip friendList <$> traverse (`Map.lookup` receivableOf) friendList
+  split <- either (const Nothing) Just (equalSplit row.amount friendList)
+  ...
+```
+
+`traverse` over a list in `Maybe` is "all of them found, or `Nothing`"; `either (const Nothing) Just`
+turns a `SplitError` into "this rule doesn't apply". So a split of money coming in, an unknown friend, or a
+share under a cent passes the rule over, and the next rule (or the guess) gets its turn. A property test
+checks the parts of any split add up to the payment, and it found the under-a-cent case.
+
+### `Reckon.Rules`: storage as text
+
+The table holds `rule_text` and a priority, and nothing else: `loadRules` parses each stored text again and
+looks up its accounts (`Map.fromListWith` over lower-cased names, since older accounts may not be lower
+case). `addRule` = `checkRule` + `renderRule` + insert, and the `UNIQUE (rule_text)` constraint catches the
+same rule written differently. The first test run caught a rule that differed only in the case of its
+quoted text being saved twice, which is why the parser normalizes description text.
+
+### `Reckon.Rules.History`: previewing and applying to the past
+
+- `loadHistory` is one SQL statement: every imported row with `LEFT JOIN LATERAL` for its entry in effect
+  and a `json_agg` subquery for the accounts that entry balances against (decoded with aeson, as in `Views`).
+  `PostedAs` is `NotPosted | PostedTo account | PostedOtherwise` (a split, or through the clearing account).
+- `previewRule :: Rule -> [HistoryRow] -> [PreviewRow]` is **pure**, so it is tested with plain lists. The
+  `effectOn` function is one `case` over (action, how the row is posted) and its first line decides that a
+  split of money in can't be carried out.
+- `applyRule` moves the `WouldMoveFrom` rows through `recategorizeRow` / `splitRow`, collecting a refusal as
+  a message instead of stopping.
+
+**Q: Why not apply a new rule to history automatically?**
+A: Because a rule is written to be right for the future, and applying it to the past rewrites hundreds
+of entries. They're reversible (reversals dated like the originals), but a wrong rule would still churn
+the ledger. So it's two steps: preview (read-only, live as you type), then an explicit apply.
+
+**Q: How do you know applying a rule doesn't change any balance?**
+A: It reuses `repostRow`, which reverses the old entry *dated like the original*. The test reads the bank
+account's balance on every day of the month before and after and compares them, and a mutation check
+(applying to rows the preview didn't list) fails the tests.
+
+### The Rules page (frontend)
+
+`RulesPage` keeps the text in `useState`, debounces it (`useDebounced`, 300 ms) and sends the settled text
+to `/api/rules/check` with `useQuery`; `placeholderData: keepPreviousData` keeps the last answer on screen
+instead of flashing. While the text differs from the settled text the answer is described as stale and Save
+is off, so nothing can be saved on the strength of an answer about older text. A problem is shown as
+`Line 1, column 15: ...` with the offending line and a caret (`pointAt`, a pure tested function).
 
 ---
 

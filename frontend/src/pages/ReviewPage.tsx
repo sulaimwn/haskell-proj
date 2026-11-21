@@ -7,6 +7,7 @@ import { Money } from '../components/Money'
 import { Notice } from '../components/Notice'
 import { QueryState } from '../components/QueryState'
 import { Section } from '../components/Section'
+import { hrefFor } from '../lib/route'
 import { useAction } from '../lib/useAction'
 
 export function ReviewPage() {
@@ -24,8 +25,10 @@ export function ReviewPage() {
           <Section title="Worth a look" hint="Things the importer noticed. Nothing here has been changed.">
             {data.importFlags.length === 0 ? <p className="muted">No import warnings.</p> : <ImportFlags flags={data.importFlags} />}
           </Section>
-          <Section title="Teach it a rule" hint="From now on, rows whose description contains this text post straight to this account.">
-            <AddRuleForm />
+          <Section title="Teach it a rule" hint="Rows you settle by hand here can be settled for good by a rule.">
+            <p>
+              <a href={hrefFor({ page: 'rules' })}>Write a rule →</a>
+            </p>
           </Section>
         </>
       )}
@@ -125,31 +128,5 @@ function ImportFlags({ flags }: { flags: ImportFlag[] }) {
         </li>
       ))}
     </ul>
-  )
-}
-
-function AddRuleForm() {
-  const [text, setText] = useState('')
-  const [account, setAccount] = useState('')
-  const action = useAction(api.addRule)
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    action.mutate({ descriptionContains: text.trim(), account, priority: null })
-  }
-  return (
-    <form className="inline-form" onSubmit={submit}>
-      <label>
-        Description contains
-        <input value={text} onChange={(event) => setText(event.target.value)} required />
-      </label>
-      <label>
-        Post to
-        <LedgerAccountSelect value={account} onChange={setAccount} />
-      </label>
-      <button type="submit" disabled={action.isPending || account === ''}>
-        Add rule
-      </button>
-      <Notice result={action.data} error={action.error} />
-    </form>
   )
 }

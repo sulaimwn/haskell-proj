@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { barPercent } from './bars'
+import { pointAt } from './caret'
 import { daysBefore, isoToday, monthLabel } from './months'
 import { formatCents, parseAmountToCents } from './money'
 import { pluralize } from './plural'
@@ -60,7 +61,7 @@ describe('routes', () => {
   })
 
   it('round-trips through the link', () => {
-    for (const hash of ['#/accounts', '#/spending', '#/receivables', '#/review', '#/import', '#/transactions/0042']) {
+    for (const hash of ['#/accounts', '#/spending', '#/receivables', '#/review', '#/rules', '#/import', '#/transactions/0042']) {
       expect(hrefFor(parseRoute(hash))).toBe(hash)
     }
   })
@@ -101,5 +102,17 @@ describe('pluralize', () => {
     expect(pluralize(0, 'row')).toBe('0 rows')
     expect(pluralize(1, 'row')).toBe('1 row')
     expect(pluralize(2, 'screenshot row')).toBe('2 screenshot rows')
+  })
+})
+
+describe('pointAt', () => {
+  it('puts a caret under the column the server named', () => {
+    expect(pointAt('when amount < 1.234 then categorize expense:x', 1, 15)).toBe('when amount < 1.234 then categorize expense:x\n              ^')
+  })
+
+  it('finds the right line of several, and copes with a column past the end', () => {
+    expect(pointAt('when amount < 0\nthen categorize food', 2, 17)).toBe('then categorize food\n                ^')
+    expect(pointAt('abc', 1, 10)).toBe('abc\n         ^')
+    expect(pointAt('', 3, 1)).toBe('\n^')
   })
 })

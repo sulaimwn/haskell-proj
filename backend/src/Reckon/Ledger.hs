@@ -19,13 +19,12 @@ import Control.Monad (forM_)
 import Control.Monad.IO.Class (MonadIO)
 import Data.Ratio (denominator, numerator)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Time (Day)
 import Database.Esqueleto.Experimental qualified as E
 import Database.Persist (Entity (..), get, getBy, insert, insert_, selectFirst, selectList, (==.))
 import Database.Persist.Sql (SqlPersistT)
 import Reckon.Database.Schema
-import Reckon.Ledger.AccountType (AccountType (..))
+import Reckon.Ledger.AccountType (AccountType (..), accountTypeFromName)
 import Reckon.Ledger.Entry
 import Reckon.Money (Cents (..))
 
@@ -48,18 +47,6 @@ findOrCreateLedgerAccount name accountType = do
   case existing of
     Just (Entity accountId _) -> pure accountId
     Nothing -> createLedgerAccount name accountType
-
--- | The account type implied by a name's prefix: @expense:food@ is an
--- expense, @receivable:alex@ is an asset (money owed to me).
-accountTypeFromName :: Text -> Maybe AccountType
-accountTypeFromName name = case Text.takeWhile (/= ':') name of
-  "asset" -> Just Asset
-  "receivable" -> Just Asset
-  "liability" -> Just Liability
-  "income" -> Just Income
-  "expense" -> Just Expense
-  "equity" -> Just Equity
-  _ -> Nothing
 
 -- | Inserts the entry and its lines. The lines are already known to balance
 -- (the type says so), and the database checks again at commit.

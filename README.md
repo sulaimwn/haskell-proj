@@ -28,7 +28,7 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | 4 | Shared expenses and receivables | ✅ done |
 | 5 | Screenshot ingestion with Claude | ✅ done |
 | 6 | Frontend: accounts, transactions, spending, receivables, review queue, import | ✅ done |
-| 7 | Scheduled jobs and a categorization rule language | next |
+| 7 | A categorization rule language (done) and scheduled jobs (next) | 🚧 |
 | 8 | Demo dataset and write-up | |
 
 ## Quickstart (Ubuntu)

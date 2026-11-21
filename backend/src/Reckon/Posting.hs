@@ -16,10 +16,7 @@ module Reckon.Posting
   , repostRow
   , RepostError (..)
   , manualErrorFromRepost
-  , addCategorizationRule
-  , RuleError (..)
   , wellKnownAccounts
-  , loadRules
   , currentEntryForRow
   , ReviewItem (..)
   , reviewItems
@@ -33,18 +30,17 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time (Day, addDays)
-import Database.Persist (Entity (..), getBy, insert, insert_, selectList)
+import Database.Persist (insert_)
 import Database.Persist.Sql (PersistValue (..), Single (..), SqlPersistT, fromSqlKey, rawSql)
-import Database.Persist.Types (SelectOpt (..))
 import Reckon.Bank (BankAccountKind)
 import Reckon.Database.Schema
-import Reckon.Import.Dedupe (normalizeDescription)
 import Reckon.Ledger (accountTypeFromName, findOrCreateLedgerAccount, postEntry, postReversal)
 import Reckon.Ledger.AccountType (AccountType (..))
 import Reckon.Ledger.Entry (EntryError, EntryLine (..), NewJournalEntry, mkBalancedLines, mkNewJournalEntry)
 import Reckon.Money (Cents (..), negateCents, renderCents)
 import Reckon.People (loadKnownPeople)
 import Reckon.Posting.Classify
+import Reckon.Rules (loadRules)
 import Reckon.Screenshot.Store (confirmProvisionalRows)
 
 -- | The accounts the planner routes to, created on first use.
@@ -105,7 +101,7 @@ postPendingRows = do
       }
   where
     isClassification predicate planned = predicate planned.classification
-    isRule = \case CategorizedByRule _ _ -> True; _ -> False
+    isRule = \case CategorizedByRule _ _ -> True; SplitByRule _ _ -> True; _ -> False
     isTransfer = \case TransferWith _ -> True; _ -> False
     isCancelledPair = \case CancelledPairWith _ -> True; _ -> False
 
@@ -160,7 +156,11 @@ reviewItems = do
 postRow :: (MonadIO m) => PlannedPosting RawBankRowId LedgerAccountId -> SqlPersistT m ()
 postRow planned = do
   let row = planned.row
-  case buildEntry row [(planned.counterAccount, negateCents row.amount)] of
+      counterLines = case planned.classification of
+        -- A split rule decided who pays what; everything else is one counter account.
+        SplitByRule _ parts -> parts
+        _ -> [(planned.counterAccount, negateCents row.amount)]
+  case buildEntry row counterLines of
     -- Can't happen: zero-amount rows are left for review, and the two lines
     -- negate each other by construction.
     Left entryError -> error ("postRow: " <> show entryError)
@@ -343,38 +343,6 @@ loadRepairableRows wellKnown since = do
 toEvidenceRow :: Bool -> EvidenceColumns -> EvidenceRow RawBankRowId LedgerAccountId
 toEvidenceRow alreadyPosted (Single rowId, Single bankAccount, Single bankAccountKind, Single transactionDate, Single description1, Single description2, Single amount) =
   EvidenceRow {rowId, bankAccount, bankAccountKind, transactionDate, description1, description2, amount, alreadyPosted}
-
-loadRules :: (MonadIO m) => SqlPersistT m [Rule LedgerAccountId]
-loadRules = do
-  rules <- selectList [] [Asc CategorizationRulePriority, Asc CategorizationRuleId]
-  pure
-    [ Rule {descriptionContains = categorizationRuleDescriptionContains rule, account = categorizationRuleLedgerAccountId rule}
-    | Entity _ rule <- rules
-    ]
-
-data RuleError
-  = UnknownAccountPrefix Text
-  | EmptyRuleText
-  | RuleAlreadyExists Text
-  deriving stock (Show, Eq)
-
--- | Adds "description contains TEXT → account". The account is created if
--- it doesn't exist; its type comes from its prefix (@expense:@ etc.).
--- Existing posted entries are not changed. The rule applies to rows posted
--- from now on.
-addCategorizationRule :: (MonadIO m) => Text -> Text -> Int -> SqlPersistT m (Either RuleError CategorizationRuleId)
-addCategorizationRule rawText accountName priority = do
-  let ruleText = normalizeDescription rawText
-  case accountTypeFromName accountName of
-    _ | Text.null ruleText -> pure (Left EmptyRuleText)
-    Nothing -> pure (Left (UnknownAccountPrefix accountName))
-    Just accountType -> do
-      existing <- getBy (UniqueCategorizationRule ruleText)
-      case existing of
-        Just _ -> pure (Left (RuleAlreadyExists ruleText))
-        Nothing -> do
-          accountId <- findOrCreateLedgerAccount accountName accountType
-          Right <$> insert CategorizationRule {categorizationRuleDescriptionContains = ruleText, categorizationRuleLedgerAccountId = accountId, categorizationRulePriority = priority}
 
 renderPostingSummary :: PostingSummary -> Text
 renderPostingSummary summary =

@@ -863,3 +863,112 @@ leaves it.
 **Alternative:** keep the dev logger in development only. Rejected: "only in
 development" is also where the real data is, since there is no other
 environment yet.
+
+### D067: A small rule language, parsed with megaparsec (Phase 7, accepted)
+
+**Context:** the original rules were "description contains TEXT, then this
+account" (D044). Real categorization needs "...and it's over $50", "...but
+only on the card", and "split this with friends", and a person writing a rule
+needs to be told exactly what is wrong with it.
+
+**Decision:** a rule is one line of text, read by a parser:
+
+```
+when description contains "TIM HORTONS" then categorize expense:coffee
+when description starts with "UBER" and amount < -50.00 then categorize expense:transport
+when description contains "DINNER" and account is credit card then split expense:food equally with alex, sam
+```
+
+Conditions (joined by `and`): `description contains | starts with | ends with
+"TEXT"`, `amount < | <= | > | >= | = | != N` (as the bank shows it: money out
+is negative), `account is chequing | savings | credit card`. One action:
+`categorize ACCOUNT`, or `split ACCOUNT equally with NAME, NAME`. Keywords
+are case-insensitive and whitespace (including line breaks) doesn't matter.
+
+- **`Reckon.Rules.Language`** is pure: the AST (`Rule`, `Condition`,
+  `Action`), `parseRule`, `renderRule`, and `RuleProblem {line, column,
+  message}`. The parser is megaparsec (already in the dependency tree via
+  other packages, so no new package to compile). Errors name the line and
+  column and what was expected; mistakes the grammar can't express as syntax
+  (a third decimal on an amount, an account with no known type, a split into a
+  non-expense account, the same friend twice) are reported *at the offending
+  token* with `parseError`, not at wherever parsing happened to stop.
+- **`Reckon.Rules.Eval`** is pure: does a rule hold for a row (`Candidate`)?
+- **`parseRule (renderRule r) == Right r`** is a property test, so the text a
+  person sees after saving is always something the system reads back.
+- **Amounts are exact.** `12.5` is 1250 cents, `1.234` is an error (not
+  rounded), and a rendered amount is never a float.
+- **A split rule is equal shares only**, with the odd cents going to me
+  first (D049). It applies to money going out only, and only when every friend
+  would owe at least a cent; for anything else (money in, an unknown friend, a
+  2-cent payment shared three ways) the rule is *passed over*, so the next rule
+  or the guess decides, rather than half-applying.
+
+**Deliberately absent:** regular expressions (matching text is what people
+actually write, and a regex is a second language to get wrong), `or` and
+parentheses (write two rules; the first match wins), dates, and rules that
+reference other rules. Each could be added to the grammar without changing the
+stored format.
+
+**Alternatives considered:** a JSON or form-built rule (fine for storage,
+terrible for typing and for explaining an error); regular expressions; a
+`parsec`/hand-rolled parser (megaparsec's error messages and `reachOffset`
+for line/column are exactly what the UI needs); embedding a scripting language
+(a security and testing burden for a handful of conditions).
+
+### D068: Rules are stored as text, in canonical form (Phase 7, accepted)
+
+**Decision:** migration `20260927090000` replaces `categorization_rules` with
+`posting_rules (rule_text, priority)`, and converts every existing rule to the
+new text in SQL (quotes and backslashes escaped the way the language reads
+them; tested on a rule containing both). The database holds the text and
+nothing else, so there is no structured copy to drift out of step with it:
+everything that uses rules parses the stored text.
+
+- **Canonical form.** `addRule` stores `renderRule (parseRule text)`.
+  Description text is kept upper-case with single spaces (as descriptions are
+  compared), account and friend names lower-case, amounts with two decimals. So
+  `WHEN description CONTAINS "tim  hortons" ...` and the same rule written
+  tidily are one rule, and the `UNIQUE (rule_text)` constraint catches a
+  duplicate that differs only in spacing or case (a bug the first test run found:
+  literals weren't normalized and the two copies were both saved).
+- **Validated before it is saved** (`checkRule`): it must parse, and every
+  friend it names must have been added (`add-person`), reported at their name.
+  The category account is created if needed.
+- **Never stops posting.** `loadRules` leaves out a stored rule that no longer
+  parses or whose account is gone, instead of failing every `post`; the Rules
+  page shows it with its problem.
+- **Rules are configuration, not evidence**, so they can be deleted (rows
+  already posted keep their account). The down migration recreates the old
+  table empty: rules written in the new language can't all be expressed in the
+  old format, so they are lost going down.
+- The original `add-rule TEXT ACCOUNT [PRIORITY]` still works (it builds the
+  equivalent rule), and the lower-casing of account names is the one change.
+
+### D069: Rules apply to the past only when asked, one rule at a time (Phase 7, accepted)
+
+**Context:** "Rules don't re-categorize the past" (D044) meant adding a rule
+did nothing for the hundreds of rows already posted as `expense:uncategorized`.
+
+**Decision:** `Reckon.Rules.History` adds two operations and the rule is never
+silently applied:
+- **`previewRule`** (pure, over `loadHistory`'s rows) says which existing rows
+  the rule matches and what would happen to each: *moves from X*, *already
+  there*, *applies when posted* (not posted yet), or *can't change* (part of a
+  transfer, a cancelled pair or a split; or a split of money coming in).
+  Nothing is written. The UI and `check-rule` call it as you type.
+- **`applyRule`** moves exactly the rows the preview says would move, each by
+  the existing `recategorizeRow` / `splitRow` (reverse dated like the original,
+  then post: no balance on any date changes, D051). A row the ledger refuses
+  to change is reported and the rest carry on.
+- **One rule at a time, ignoring priorities.** The preview answers "what would
+  *this rule* do to the rows it matches", which is what the person writing it
+  wants to see. A row that a different rule or a manual recategorization put
+  elsewhere is shown moving *from* there, so nothing is hidden, and the person
+  decides. Applying the whole rule set in priority order, retroactively, is a
+  different (and more dangerous) feature.
+
+**Alternatives considered:** applying a new rule to history automatically when
+it's saved (a wrong rule would silently rewrite the past; reversible, but
+noisy); previewing against the full rule set (surprising: a rule's preview would
+change when an unrelated rule is added).

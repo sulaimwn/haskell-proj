@@ -11,7 +11,9 @@
 --    accounts within a few days. Both legs go to the clearing account, so
 --    moving money is never counted as spending, and each account still
 --    matches its own statement on every date.
--- 3. The first categorization rule whose text appears in the description.
+-- 3. The first rule (in the rule language, "Reckon.Rules.Language") whose
+--    conditions all hold: it either picks an account or splits the payment
+--    with friends.
 -- 4. Money coming in that mentions a person I share expenses with is
 --    probably their repayment. It's left for review with a suggestion, not
 --    posted: counting it as income would be wrong, and applying it to their
@@ -33,6 +35,9 @@
 module Reckon.Posting.Classify
   ( EvidenceRow (..)
   , Rule (..)
+  , Outcome (..)
+  , containsRule
+  , ruleAccount
   , KnownPerson (..)
   , WellKnownAccounts (..)
   , Classification (..)
@@ -48,7 +53,10 @@ module Reckon.Posting.Classify
 
 import Data.Either (partitionEithers)
 import Data.List (find)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -56,6 +64,9 @@ import Data.Time (Day, diffDays)
 import Reckon.Bank (BankAccountKind (..))
 import Reckon.Import.Dedupe (normalizeDescription)
 import Reckon.Money (Cents (..), negateCents)
+import Reckon.Posting.Split (Participant (..), equalSplit, splitParts)
+import Reckon.Rules.Eval (Candidate (..), allHold)
+import Reckon.Rules.Language (Condition (..))
 
 -- | A bank row the planner may post. @account@ identifies the bank account
 -- (in practice its ledger account's id).
@@ -74,12 +85,35 @@ data EvidenceRow rowId account = EvidenceRow
   }
   deriving stock (Show, Eq)
 
+-- | A rule from the rule language, with its accounts looked up
+-- (@Reckon.Posting.loadRules@ does that). The conditions are the
+-- language's; what the rule does is an 'Outcome'.
 data Rule account = Rule
-  { descriptionContains :: Text
-  -- ^ Upper-case, as stored.
-  , account :: account
+  { label :: Text
+  -- ^ The rule as text, shown in messages.
+  , conditions :: NonEmpty Condition
+  , outcome :: Outcome account
   }
   deriving stock (Show, Eq)
+
+data Outcome account
+  = -- | Post the row against this account.
+    ToAccount account
+  | -- | Split a payment equally with these friends (by name). My share goes
+    -- to the account.
+    SplitWith account (NonEmpty Text)
+  deriving stock (Show, Eq)
+
+-- | The account a rule puts my own money in.
+ruleAccount :: Rule account -> account
+ruleAccount rule = case rule.outcome of
+  ToAccount account -> account
+  SplitWith account _ -> account
+
+-- | The simplest rule: @description contains TEXT@, then this account.
+containsRule :: Text -> account -> Rule account
+containsRule text account =
+  Rule {label = text, conditions = DescriptionContains text :| [], outcome = ToAccount account}
 
 -- | Someone I share expenses with, as the planner needs to know them.
 data KnownPerson account = KnownPerson
@@ -106,6 +140,9 @@ data Classification rowId account
   | -- | The other side of a transfer between two of my accounts.
     TransferWith rowId
   | CategorizedByRule Text account
+  | -- | A rule split the payment: the rule's text, and each non-bank line
+    -- of the entry (my share, then each friend's).
+    SplitByRule Text [(account, Cents)]
   | UntrackedCardPayment
   | Uncategorized
   deriving stock (Show, Eq)
@@ -150,10 +187,14 @@ cancellationWindowDays = 45
 searchableDescription :: EvidenceRow rowId account -> Text
 searchableDescription row = normalizeDescription (row.description1 <> " " <> row.description2)
 
--- | The first rule (in the given priority order) whose text appears in the
--- row's description.
+-- | The facts about a row that rules can look at.
+candidateOf :: EvidenceRow rowId account -> Candidate
+candidateOf row = Candidate {description = searchableDescription row, amount = row.amount, kind = row.bankAccountKind}
+
+-- | The first rule (in the given priority order) whose conditions all hold
+-- for the row.
 matchingRule :: [Rule account] -> EvidenceRow rowId account -> Maybe (Rule account)
-matchingRule rules row = find (\rule -> rule.descriptionContains `Text.isInfixOf` searchableDescription row) rules
+matchingRule rules row = find (\rule -> allHold rule.conditions (candidateOf row)) rules
 
 planPosting ::
   (Ord rowId, Eq account) =>
@@ -218,11 +259,28 @@ planPosting wellKnown rules people rows =
     -- friend is a repayment.
     (repaymentRows, singlePostings) = partitionEithers (map classifySingle singles)
 
-    classifySingle row = case matchingRule rules row of
-      Just rule -> Right (posting row (CategorizedByRule rule.descriptionContains rule.account) rule.account)
-      Nothing -> case peopleMentioned row of
+    classifySingle row = case mapMaybe (applyRule row) rules of
+      planned : _ -> Right planned
+      [] -> case peopleMentioned row of
         [] -> Right (classifyByGuess row)
         names -> Left (row, PossibleRepayment names)
+    -- A matching rule that can't be carried out for this row (a split of
+    -- money coming in, or with someone who isn't known) is passed over,
+    -- not half-applied, so the next rule, or the guess, decides.
+    applyRule row rule
+      | not (allHold rule.conditions (candidateOf row)) = Nothing
+      | otherwise = case rule.outcome of
+          ToAccount account -> Just (posting row (CategorizedByRule rule.label account) account)
+          SplitWith account friends -> do
+            let friendList = NonEmpty.toList friends
+            friendAccounts <- Map.fromList . zip friendList <$> traverse (`Map.lookup` receivableOf) friendList
+            split <- either (const Nothing) Just (equalSplit row.amount friendList)
+            let accountFor = \case
+                  Me -> Just account
+                  Friend name -> Map.lookup name friendAccounts
+                counterLines = [(counter, amount) | (participant, amount) <- splitParts split, Just counter <- [accountFor participant]]
+            Just (posting row (SplitByRule rule.label counterLines) account)
+    receivableOf = Map.fromList [(person.name, person.account) | person <- people]
     classifyByGuess row
       | looksLikeCardPayment row = posting row UntrackedCardPayment wellKnown.untrackedCards
       | row.amount < mempty = posting row Uncategorized wellKnown.uncategorizedExpense

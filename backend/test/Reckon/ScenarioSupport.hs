@@ -9,6 +9,7 @@ module Reckon.ScenarioSupport
   , forScenario
   , importCsv
   , header
+  , inlineCsv
   , post
   , postedRows
   , entryLinesForRow
@@ -145,6 +146,17 @@ bankAccount env last4Text = do
 
 header :: Text
 header = "\"Account Type\",\"Account Number\",\"Transaction Date\",\"Cheque Number\",\"Description 1\",\"Description 2\",\"CAD$\",\"USD$\"\n"
+
+-- | A chequing export of (date, second description line, amount) rows, for
+-- 'importCsv'. Dates are @M/D/2026@: 'forScenario' moves them into the
+-- scenario's year. The first description line is always "Interac purchase".
+inlineCsv :: [(Text, Text, Text)] -> Text
+inlineCsv rows =
+  header
+    <> Text.concat
+      [ "Chequing,00000-0001234," <> date <> ",,\"Interac purchase\",\"" <> description <> "\"," <> amount <> ",\n"
+      | (date, description, amount) <- rows
+      ]
 
 -- | The sum of an account's rows that have an entry in effect, up to a date.
 postedSum :: AppEnv -> BankAccountId -> Day -> IO Cents

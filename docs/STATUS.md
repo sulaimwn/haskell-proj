@@ -3,17 +3,17 @@
 **The handoff doc.** If you're picking this project up, read this first,
 then [CLAUDE.md](../CLAUDE.md). Updated in every PR.
 
-_Last updated: 2026-11-21, end of Phase 6._
+_Last updated: 2026-11-21, Phase 7 in progress (rule language done; scheduled jobs next)._
 
 ## Where we are
 
 **Phase 6 (the frontend) is complete.** The web UI does everything the command
 line does, and nothing in it has been used with real data or a real API key
-yet (see "Unverified" below). Phases 3 to 6 are stacked on one branch and in
+yet (see "Unverified" below). Phases 3 to 7 are stacked on one branch and in
 one PR, because the owner asked for work to continue without waiting for review
 ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4), one commit per
 phase, so they can be reviewed separately). Nothing has been merged by Claude.
-Phase 7 (scheduled jobs and a rule language) is next.
+Phase 7 is in progress: the rule language is done, scheduled jobs are next.
 
 | Phase | Status |
 |---|---|
@@ -24,12 +24,12 @@ Phase 7 (scheduled jobs and a rule language) is next.
 | 4: Shared expenses and receivables | ✅ done, same PR (stacked on 3) |
 | 5: Screenshot ingestion with Claude | ✅ done, same PR (stacked on 4) |
 | 6: Frontend | ✅ done, same PR (stacked on 5) |
-| 7: Scheduled jobs and rules | ⏭ next |
+| 7: Scheduled jobs and rules | 🚧 rule language done (this PR); scheduled jobs next |
 | 8: Demo and README | not started |
 
 ## What works today
 
-**The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Six pages:
+**The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Seven pages:
 
 | Page | What it does |
 |---|---|
@@ -38,11 +38,18 @@ Phase 7 (scheduled jobs and a rule language) is next.
 | Spending | Spending per expense category, month by month, with bars. Transfers, friends' shares and refunds are not spending. |
 | Receivables | What each friend owes you; add a friend. |
 | Review | Rows the ledger wouldn't post on its own (settle them, or apply a possible repayment to the friend it names), screenshot rows waiting for a CSV (release one), importer warnings, add a rule. |
+| Rules | Write categorization rules in a small language (`when description contains "UBER" and amount < -50.00 then categorize expense:transport`, or `... then split expense:food equally with alex, sam`). Read as you type: errors point at the line and column, and a preview shows which rows you've already imported it would move. Save, or save and move the posted rows. |
 | Import | Upload a bank CSV, or screenshots of the RBC app (needs `ANTHROPIC_API_KEY`). |
 
 The API behind it has no login, so it listens on loopback only and refuses
 other host names and non-JSON writes (D061). Everything below it is also
 available on the command line.
+
+**Rules (Phase 7):** one line of text per rule (D067). The database stores only the canonical text, so
+nothing drifts from it (D068). Saving never touches posted rows; `check-rule` / the Rules page preview what a
+rule would do to existing rows, and `apply-rule` / "Save and move N rows" moves them, through the same
+reverse-and-repost as `recategorize`, so no balance changes on any date (D069). Existing rules were converted
+by the migration.
 
 **The command line:** the full loop, from a bank export to a reconciled ledger. Step by step: [DEVELOPMENT.md](DEVELOPMENT.md#from-import-to-a-reconciled-ledger).
 
@@ -143,8 +150,8 @@ database; reversals; balances as of a date.
 **Skeleton (Phase 0):** `make dev`, `/api/health` with a live badge,
 TypeScript types generated from Haskell, the privacy guard, CI.
 
-Tests: 215 backend examples (hspec + hedgehog properties, including model-based and
-database properties; none call the real API) and 29 frontend tests (Vitest, with a fake
+Tests: 259 backend examples (hspec + hedgehog properties, including model-based and
+database properties; none call the real API) and 36 frontend tests (Vitest, with a fake
 `fetch`). `make check` passes.
 
 ## Decisions the owner should check (made while they were away)
@@ -175,6 +182,10 @@ option was taken. All are easy to change now, harder later. **D038**:
 6. **Screenshots are uploaded from the Import page or the command line.** The
    account is chosen by its last 4 digits (the model never returns account
    numbers) and must already have had a CSV imported.
+8. **Rule language choices** (D067-D069), made without the owner: no `or`/regex/parentheses (write two
+   rules); splits are equal shares only; a rule you save never rewrites the past (applying is an explicit
+   second step); account names in rules are lower-cased, and rules written the old way (`add-rule TEXT
+   ACCOUNT`) were converted to the new text by migration `20260927090000`.
 7. **The UI has no login** (D061): it relies on loopback binding, a Host
    allowlist and JSON-only writes. Fine for a laptop; a login is needed before
    Phase 8 puts it anywhere else.
@@ -223,17 +234,12 @@ Nothing else here has been run on a real RBC export yet either. When the owner d
   MASTERCARD, AMEX, AMERICAN EXPRESS or CREDIT CARD. Real descriptions may
   differ. `make post`'s summary shows what was recognized.
 
-## What's next: Phase 7 (scheduled jobs and a rule language)
+## What's next: Phase 7, second half (scheduled jobs)
 
-From [SPEC.md](SPEC.md#phase-7-scheduled-jobs-and-rules): a Postgres-backed job queue that runs
+The rule language, split rules and the preview against past transactions are done (D067-D069). Left
+from [SPEC.md](SPEC.md#phase-7-scheduled-jobs-and-rules): a Postgres-backed job queue that runs
 recurring checks (statement periods with no checkpoint, provisional entries nobody confirmed after
-N days, upcoming due dates), and a small categorization rule language parsed and evaluated in
-Haskell, with validation errors shown in the frontend, split rules, and "preview against past
-transactions".
-
-Things to decide at the start of Phase 7:
-- Whether the rule language replaces the "description contains TEXT" rules (D044) or sits on top of them.
-- Where scheduled-job results show up: probably the Review page's "Worth a look" list.
+N days, upcoming due dates), with the results shown in the frontend.
 
 ## Open questions for the owner
 
@@ -263,9 +269,11 @@ Things to decide at the start of Phase 7:
 - **Review items repeat.** The Review page lists import warnings ("worth a look") but can't
   dismiss them, so a later overlapping import can flag the same situation again (e.g. the old
   version of a renamed row is "missing" from every newer export).
-- **Rules don't re-categorize the past.** A rule added after posting only
-  affects rows posted later (D044). `recategorize` fixes one row at a time
-  (D051). Phase 7's "preview against past transactions" is the bulk answer.
+- **A saved rule only affects rows posted later** (D044), by design: moving posted rows is the explicit
+  `apply-rule` / "Save and move" step with a preview (D069). That step considers one rule at a time and
+  ignores other rules' priorities, so a row a different rule put elsewhere is shown moving *from* there.
+- **The rule language has no `or`, no regular expressions and no parentheses** (write two rules), and
+  splits are equal shares only (D067).
 - **A typo in an account name on the command line creates a new account**, and accounts can't
   be deleted (append-only). The web UI avoids this by choosing from existing accounts (a
   select), but it can't create one; `make db-psql`, `SELECT name FROM ledger_accounts` shows

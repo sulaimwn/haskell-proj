@@ -1,6 +1,7 @@
 module Reckon.Posting.ClassifySpec (spec) where
 
 import Data.Int (Int64)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -11,6 +12,7 @@ import Hedgehog.Range qualified as Range
 import Reckon.Bank (BankAccountKind (..))
 import Reckon.Money (Cents (..), sumCents)
 import Reckon.Posting.Classify
+import Reckon.Rules.Language (Comparison (..), Condition (..))
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -29,7 +31,7 @@ spec :: Spec
 spec = do
   describe "single rows" $ do
     it "uses the first matching rule, in priority order" $ do
-      let rules = [Rule "TIM HORTONS" "expense:coffee", Rule "TIM" "expense:other"]
+      let rules = [containsRule "TIM HORTONS" "expense:coffee", containsRule "TIM" "expense:other"]
           plan = planPosting wellKnown rules [] [chequing 1 (day 3) "Interac purchase" "Tim Hortons #12" (-250)]
       map (.counterAccount) plan.postings `shouldBe` ["expense:coffee"]
 
@@ -39,7 +41,7 @@ spec = do
       map (.counterAccount) plan.postings `shouldBe` ["liability:untracked-cards"]
 
     it "lets a rule override the card-payment guess" $ do
-      let plan = planPosting wellKnown [Rule "AMEX" "expense:gifts"] [] [chequing 1 (day 3) "Online Banking payment" "AMEX CREDIT CARD" (-12000)]
+      let plan = planPosting wellKnown [containsRule "AMEX" "expense:gifts"] [] [chequing 1 (day 3) "Online Banking payment" "AMEX CREDIT CARD" (-12000)]
       map (.counterAccount) plan.postings `shouldBe` ["expense:gifts"]
 
     it "falls back to uncategorized expense or income by sign" $ do
@@ -49,6 +51,48 @@ spec = do
     it "leaves a zero-amount row for review" $
       (planPosting wellKnown [] [] [chequing 1 (day 3) "Fee waived" "" 0]).leftForReview
         `shouldBe` [(chequing 1 (day 3) "Fee waived" "" 0, ZeroAmount)]
+
+  describe "rules in the rule language" $ do
+    let dinner = chequing 1 (day 3) "Interac purchase" "TASTY BISTRO" (-9001)
+        splitRule = Rule {label = "split dinner", conditions = DescriptionContains "BISTRO" :| [], outcome = SplitWith "expense:food" ("alex" :| ["sam"])}
+
+    it "applies a rule only when every condition holds" $ do
+      let rule = Rule {label = "big uber", conditions = DescriptionContains "UBER" :| [AmountIs LessThan (Cents (-5000))], outcome = ToAccount "expense:travel"}
+          small = chequing 1 (day 3) "UBER TRIP" "" (-1200)
+          big = chequing 2 (day 4) "UBER TRIP" "" (-8000)
+          plan = planPosting wellKnown [rule] [] [small, big]
+      sortOn fst [(posting.row.rowId, posting.counterAccount) | posting <- plan.postings]
+        `shouldBe` [(1, "expense:uncategorized"), (2, "expense:travel")]
+
+    it "splits a payment as the rule says: my share to the category, the rest to what friends owe" $ do
+      let plan = planPosting wellKnown [splitRule] alexAndSam [dinner]
+      [posting.classification | posting <- plan.postings]
+        `shouldBe` [SplitByRule "split dinner" [("expense:food", Cents 3001), ("receivable:alex", Cents 3000), ("receivable:sam", Cents 3000)]]
+
+    it "splits so that the parts add up to the payment exactly, odd cents to me first" $ hedgehog $ do
+      -- Three ways, so at least 3 cents: everyone gets one.
+      cents <- forAll (Gen.int64 (Range.linear 3 100_000))
+      let plan = planPosting wellKnown [splitRule] alexAndSam [chequing 1 (day 3) "TASTY BISTRO" "" (negate cents)]
+      case [parts | PlannedPosting {classification = SplitByRule _ parts} <- plan.postings] of
+        [parts] -> sumCents (map snd parts) === Cents cents
+        other -> fail ("expected one split posting, got " <> show other)
+
+    it "passes over a split too small to give every friend a cent" $ do
+      let plan = planPosting wellKnown [splitRule] alexAndSam [chequing 1 (day 3) "TASTY BISTRO" "" (-2)]
+      map (.classification) plan.postings `shouldBe` [Uncategorized]
+
+    it "passes over a split of money coming in and lets the next rule or the guess decide" $ do
+      let refund = chequing 1 (day 3) "REFUND" "TASTY BISTRO" 4000
+          plan = planPosting wellKnown [splitRule] alexAndSam [refund]
+      map (.classification) plan.postings `shouldBe` [Uncategorized]
+
+    it "passes over a split with someone who isn't known" $ do
+      let plan = planPosting wellKnown [splitRule] [alex] [dinner]
+      map (.classification) plan.postings `shouldBe` [Uncategorized]
+
+    it "falls through to a later rule when an earlier split can't apply" $ do
+      let plan = planPosting wellKnown [splitRule, containsRule "BISTRO" "expense:restaurants"] [alex] [dinner]
+      map (.counterAccount) plan.postings `shouldBe` ["expense:restaurants"]
 
   describe "transfers between my accounts" $ do
     it "pairs opposite amounts in two accounts within 5 days, both via clearing" $ do
@@ -89,8 +133,7 @@ spec = do
         `shouldBe` [(1, CancelledPairWith 2), (2, CancelledPairWith 1)]
 
   describe "repayments from people I share expenses with" $ do
-    let alexAndSam = [alex, KnownPerson "sam" "SAM" "receivable:sam"]
-        deposit = chequing 1 (day 6) "e-Transfer received" "ALEX EXAMPLE" 3000
+    let deposit = chequing 1 (day 6) "e-Transfer received" "ALEX EXAMPLE" 3000
 
     it "leaves money in from a known person for review instead of calling it income" $ do
       let plan = planPosting wellKnown [] alexAndSam [deposit]
@@ -102,7 +145,7 @@ spec = do
       map snd plan.leftForReview `shouldBe` [PossibleRepayment ["alex", "alexander"]]
 
     it "lets a rule override the repayment suggestion" $ do
-      let plan = planPosting wellKnown [Rule "ALEX" "income:other"] alexAndSam [deposit]
+      let plan = planPosting wellKnown [containsRule "ALEX" "income:other"] alexAndSam [deposit]
       map (.counterAccount) plan.postings `shouldBe` ["income:other"]
 
     it "only suggests repayments for money coming in" $ do
@@ -116,7 +159,7 @@ spec = do
   describe "any mix of rows (property)" $ do
     it "posts each new row exactly once or leaves it for review, and pairs always net to zero" $ hedgehog $ do
       rows <- forAll genRows
-      let plan = planPosting wellKnown [Rule "GROCERY" "expense:groceries"] [alex] rows
+      let plan = planPosting wellKnown [containsRule "GROCERY" "expense:groceries"] [alex] rows
           newRows = sort [row.rowId | row <- rows, not row.alreadyPosted]
           handled = sort (map (.row.rowId) (filter (not . (.replacesExistingEntry)) plan.postings) <> map (\(row, _) -> row.rowId) plan.leftForReview)
       -- Every new row is either posted or waiting for review, exactly once.
@@ -133,6 +176,9 @@ spec = do
 
 alex :: KnownPerson Text
 alex = KnownPerson "alex" "ALEX" "receivable:alex"
+
+alexAndSam :: [KnownPerson Text]
+alexAndSam = [alex, KnownPerson "sam" "SAM" "receivable:sam"]
 
 genRows :: Gen [EvidenceRow Int Text]
 genRows = do

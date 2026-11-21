@@ -48,6 +48,10 @@ import Reckon.Money (Cents (..))
 import Reckon.People qualified as People
 import Reckon.Posting qualified as Posting
 import Reckon.Reconcile qualified as Reconcile
+import Reckon.Rules qualified as Rules
+import Reckon.Rules (StoredRule (..))
+import Reckon.Rules.History qualified as History
+import Reckon.Rules.Language (RuleProblem (..), renderProblem, renderRule)
 import Reckon.Screenshot.Import qualified as Screenshots
 import Reckon.Screenshot.Store qualified as ScreenshotStore
 import Reckon.Security (hostGuard, jsonOnlyWrites)
@@ -77,7 +81,11 @@ server =
     , splitRow = postSplitRow
     , releaseProvisional = \rowNumber _ -> postRelease rowNumber
     , addPerson = postAddPerson
+    , listRules = getRules
     , addRule = postAddRule
+    , checkRule = postCheckRule
+    , applyRule = postApplyRule
+    , deleteRule = \ruleNumber _ -> postDeleteRule ruleNumber
     , setOpeningBalance = postOpeningBalance
     , addCheckpoint = postCheckpoint
     }
@@ -224,12 +232,64 @@ postAddPerson request = do
     Right _ -> pure ActionResult {message = "Added " <> request.name <> ".", details = ["Their share of split payments goes to receivable:" <> request.name <> "."]}
     Left problem -> refuse err422 (describePersonError problem)
 
+getRules :: AppM [RuleView]
+getRules = do
+  stored <- runDb Rules.loadStoredRules
+  pure
+    [ RuleView
+        { ruleId = fromIntegral rule.ruleId
+        , ruleText = rule.ruleText
+        , priority = rule.priority
+        , problem = either (Just . renderProblem) (const Nothing) rule.parsed
+        }
+    | rule <- stored
+    ]
+
 postAddRule :: AddRuleRequest -> AppM ActionResult
 postAddRule request = do
-  result <- runDb (Posting.addCategorizationRule request.descriptionContains request.account (fromMaybe 100 request.priority))
+  result <- runDb (Rules.addRule request.ruleText (fromMaybe 100 request.priority))
   case result of
-    Right _ -> pure ActionResult {message = "Added a rule: " <> Text.toUpper request.descriptionContains <> " goes to " <> request.account <> ".", details = ["It applies to rows posted from now on."]}
+    Right saved ->
+      pure
+        ActionResult
+          { message = "Saved the rule."
+          , details = [saved.ruleText, "It applies to rows posted from now on. To change rows already posted, preview it and apply it."]
+          }
     Left problem -> refuse err422 (describeRuleError problem)
+
+-- | A rule that isn't one is a normal answer here, with the problem and where
+-- it is: this is called as the text is typed.
+postCheckRule :: CheckRuleRequest -> AppM RuleCheck
+postCheckRule request = do
+  checked <- runDb (Rules.checkRule request.ruleText)
+  case checked of
+    Left problem ->
+      pure RuleCheck {problem = Just RuleProblemView {line = problem.line, column = problem.column, message = problem.message}, canonicalText = Nothing, preview = Nothing}
+    Right rule -> do
+      history <- runDb History.loadHistory
+      pure RuleCheck {problem = Nothing, canonicalText = Just (renderRule rule), preview = Just (Views.rulePreviewView (History.previewRule rule history))}
+
+postApplyRule :: ApplyRuleRequest -> AppM ActionResult
+postApplyRule request = do
+  checked <- runDb (Rules.checkRule request.ruleText)
+  case checked of
+    Left problem -> refuse err422 ("That isn't a rule. " <> renderProblem problem)
+    Right rule -> do
+      outcome <- runDb (History.applyRule rule)
+      pure
+        ActionResult
+          { message = "Moved " <> Text.pack (show outcome.moved) <> (if outcome.moved == 1 then " row." else " rows.")
+          , details = [renderDay date <> "  " <> description <> ": " <> why | (date, description, why) <- outcome.refused]
+          }
+  where
+    renderDay = Text.pack . show
+
+postDeleteRule :: Int64 -> AppM ActionResult
+postDeleteRule ruleNumber = do
+  result <- runDb (Rules.deleteRule ruleNumber)
+  case result of
+    Right () -> pure ActionResult {message = "Deleted the rule.", details = ["Rows already posted keep the account they were given."]}
+    Left problem -> refuse err404 (describeRuleError problem)
 
 postOpeningBalance :: Text -> BalanceRequest -> AppM ActionResult
 postOpeningBalance last4Text request = do

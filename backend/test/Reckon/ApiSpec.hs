@@ -294,6 +294,62 @@ spec = beforeAll makeTestEnv $ do
       accounts <- getResponse env "/api/ledger-accounts" >>= succeeded @[LedgerAccountView]
       map (.name) accounts `shouldSatisfy` elem "asset:clearing"
       map (.name) accounts `shouldSatisfy` (\names -> names == sort names)
+
+  describe "rules over HTTP" $ do
+    let bistroRule scenario account = "when description contains \"BISTRO EXAMPLE" <> scenario.tag <> "\" and amount < 0.00 then categorize " <> account
+        accountFor scenario = "expense:bistro-" <> Text.toLower scenario.tag
+
+    it "answers a bad rule with where it went wrong, and a good one with what it would do to existing rows" $ \env -> do
+      bad <- postResponse env "/api/rules/check" CheckRuleRequest {ruleText = "when amount < 1.234 then categorize expense:x"} >>= succeeded @RuleCheck
+      fmap (\p -> (p.line, p.column)) bad.problem `shouldBe` Just (1, 15)
+      bad.canonicalText `shouldBe` Nothing
+      bad.preview `shouldBe` Nothing
+
+      scenario <- newScenario env
+      importCsv env scenario (inlineCsv [("2/3/2026", "BISTRO EXAMPLE", "-30.01"), ("2/4/2026", "BISTRO EXAMPLE", "-12.00"), ("2/5/2026", "BISTRO EXAMPLE", "5.00")])
+      _ <- postResponse env "/api/post" emptyBody >>= succeeded @ActionResult
+      good <- postResponse env "/api/rules/check" CheckRuleRequest {ruleText = "WHEN description CONTAINS \"bistro  example" <> scenario.tag <> "\" and amount < 0.00 then categorize " <> accountFor scenario} >>= succeeded @RuleCheck
+      good.problem `shouldBe` Nothing
+      good.canonicalText `shouldBe` Just (bistroRule scenario (accountFor scenario))
+      case good.preview of
+        Just preview -> do
+          (preview.matched, preview.wouldMove, preview.alreadyThere, preview.onNextPost, preview.cannotChange) `shouldBe` (2, 2, 0, 0, 0)
+          map (.amountCents) preview.rows `shouldBe` [-1200, -3001]
+          map (.effect) preview.rows `shouldBe` [EffectMove, EffectMove]
+          map (.detail) preview.rows `shouldBe` [Just "expense:uncategorized", Just "expense:uncategorized"]
+        Nothing -> expectationFailure "expected a preview"
+
+    it "saves a rule, lists it, applies it to posted rows, and deletes it" $ \env -> do
+      scenario <- newScenario env
+      importCsv env scenario (inlineCsv [("2/3/2026", "BISTRO EXAMPLE", "-30.01"), ("2/4/2026", "BISTRO EXAMPLE", "-12.00")])
+      _ <- postResponse env "/api/post" emptyBody >>= succeeded @ActionResult
+
+      -- Applying is a separate, explicit step: saving changes nothing already posted.
+      saved <- postResponse env "/api/rules" AddRuleRequest {ruleText = bistroRule scenario (accountFor scenario), priority = Nothing} >>= succeeded @ActionResult
+      saved.details `shouldSatisfy` elem (bistroRule scenario (accountFor scenario))
+      listed <- getResponse env "/api/rules" >>= succeeded @[RuleView]
+      let mine = [rule | rule <- listed, rule.ruleText == bistroRule scenario (accountFor scenario)]
+      map (\rule -> (rule.priority, rule.problem)) mine `shouldBe` [(100, Nothing)]
+      before <- transactionsOf env scenario
+      map (\t -> map (.account) t.counterLines) before `shouldBe` [["expense:uncategorized"], ["expense:uncategorized"]]
+
+      applied <- postResponse env "/api/rules/apply" ApplyRuleRequest {ruleText = bistroRule scenario (accountFor scenario)} >>= succeeded @ActionResult
+      applied.message `shouldBe` "Moved 2 rows."
+      after <- transactionsOf env scenario
+      map (\t -> map (.account) t.counterLines) after `shouldBe` [[accountFor scenario], [accountFor scenario]]
+
+      forM_ mine $ \rule ->
+        postResponse env (ByteString.concat ["/api/rules/", Text.encodeUtf8 (Text.pack (show rule.ruleId)), "/delete"]) emptyBody >>= void' (succeeded @ActionResult)
+      remaining <- getResponse env "/api/rules" >>= succeeded @[RuleView]
+      [rule | rule <- remaining, rule.ruleText == bistroRule scenario (accountFor scenario)] `shouldBe` []
+
+    it "422s a rule that isn't one, with the position; 404s deleting one that isn't there" $ \env -> do
+      problem <- postResponse env "/api/rules" AddRuleRequest {ruleText = "when amount < 1.234 then categorize expense:x", priority = Nothing} >>= refusedWith status422
+      problem `shouldSatisfy` Text.isInfixOf "line 1, column 15"
+      applying <- postResponse env "/api/rules/apply" ApplyRuleRequest {ruleText = "nonsense"} >>= refusedWith status422
+      applying `shouldSatisfy` Text.isInfixOf "That isn't a rule"
+      postResponse env "/api/rules/0/delete" emptyBody >>= void' (refusedWith status404)
   where
     sortedDates transactions = sort (map (.date) transactions)
+    transactionsOf env scenario = getResponse env (ByteString.concat ["/api/accounts/", Text.encodeUtf8 scenario.chequingLast4, "/transactions"]) >>= succeeded @[TransactionView]
     void' check response = () <$ check response

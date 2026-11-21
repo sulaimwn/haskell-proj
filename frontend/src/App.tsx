@@ -5,6 +5,7 @@ import { AccountsPage } from './pages/AccountsPage'
 import { ImportPage } from './pages/ImportPage'
 import { ReceivablesPage } from './pages/ReceivablesPage'
 import { ReviewPage } from './pages/ReviewPage'
+import { RulesPage } from './pages/RulesPage'
 import { SpendingPage } from './pages/SpendingPage'
 import { TransactionsPage } from './pages/TransactionsPage'
 
@@ -14,6 +15,7 @@ const navigation: Route[] = [
   { page: 'spending' },
   { page: 'receivables' },
   { page: 'review' },
+  { page: 'rules' },
   { page: 'import' },
 ]
 
@@ -51,6 +53,8 @@ function Page({ route }: { route: Route }) {
       return <ReceivablesPage />
     case 'review':
       return <ReviewPage />
+    case 'rules':
+      return <RulesPage />
     case 'import':
       return <ImportPage />
     default:

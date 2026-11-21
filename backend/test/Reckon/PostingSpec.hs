@@ -16,6 +16,7 @@ import Reckon.Ledger (accountBalanceAsOf)
 import Reckon.Money (Cents (..))
 import Reckon.Posting
 import Reckon.Reconcile
+import Reckon.Rules (addContainsRule)
 import Reckon.Reconcile.Explain (EvidenceSummary (..), Finding (..), ReconciliationInputs (..))
 import Reckon.ScenarioSupport
 import Reckon.TestSupport
@@ -30,8 +31,8 @@ importFixture env scenario = do
 -- | The two rules the fixture tests use, scoped to the scenario's tag.
 addFixtureRules :: AppEnv -> Scenario -> IO ()
 addFixtureRules env scenario = runTestDatabase env $ do
-  void (addCategorizationRule ("EXAMPLE" <> scenario.tag <> " EMPLOYER") "income:job" 100)
-  void (addCategorizationRule ("EXAMPLE" <> scenario.tag <> " HYDRO") "expense:utilities" 100)
+  void (addContainsRule ("EXAMPLE" <> scenario.tag <> " EMPLOYER") "income:job" 100)
+  void (addContainsRule ("EXAMPLE" <> scenario.tag <> " HYDRO") "expense:utilities" 100)
 
 spec :: Spec
 spec = beforeAll makeTestEnv $ do

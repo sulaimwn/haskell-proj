@@ -17,7 +17,9 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Reckon.Money (renderCents)
 import Reckon.People (PersonError (..))
-import Reckon.Posting (ManualPostingError (..), RuleError (..))
+import Reckon.Posting (ManualPostingError (..))
+import Reckon.Rules (RuleError (..))
+import Reckon.Rules.Language (renderProblem)
 import Reckon.Posting.Split (SplitError (..))
 import Reckon.Reconcile (CheckpointError (..), OpeningBalanceError (..))
 import Reckon.Screenshot.Store (ReleaseError (..))
@@ -60,7 +62,9 @@ describePersonError = \case
 describeRuleError :: RuleError -> Text
 describeRuleError = \case
   EmptyRuleText -> "The rule text is empty."
-  RuleAlreadyExists existing -> "A rule for \"" <> existing <> "\" already exists."
+  RuleAlreadyExists existing -> "That rule already exists: " <> existing
+  RuleNotFound -> "There is no rule with that number."
+  InvalidRule problem -> "That isn't a rule. " <> renderProblem problem
   UnknownAccountPrefix name -> "\"" <> name <> "\" must start with expense:, income:, asset:, liability:, receivable: or equity:"
 
 describeOpeningBalanceError :: OpeningBalanceError -> Text

@@ -55,7 +55,16 @@ data Routes mode = Routes
   , splitRow :: mode :- "rows" :> Capture "id" Int64 :> "split" :> ReqBody '[JSON] SplitRequest :> Post '[JSON] ActionResult
   , releaseProvisional :: mode :- "provisional" :> Capture "id" Int64 :> "release" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
   , addPerson :: mode :- "people" :> ReqBody '[JSON] AddPersonRequest :> Post '[JSON] ActionResult
+  , listRules :: mode :- "rules" :> Get '[JSON] [RuleView]
+  -- ^ Every saved rule in the order they run.
   , addRule :: mode :- "rules" :> ReqBody '[JSON] AddRuleRequest :> Post '[JSON] ActionResult
+  , checkRule :: mode :- "rules" :> "check" :> ReqBody '[JSON] CheckRuleRequest :> Post '[JSON] RuleCheck
+  -- ^ Reads and previews a rule without saving it. A bad rule is a normal
+  -- answer (with the problem and where it is), not an HTTP error: the
+  -- frontend calls this as you type.
+  , applyRule :: mode :- "rules" :> "apply" :> ReqBody '[JSON] ApplyRuleRequest :> Post '[JSON] ActionResult
+  -- ^ Applies a rule to the rows already posted that it would move.
+  , deleteRule :: mode :- "rules" :> Capture "id" Int64 :> "delete" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
   , setOpeningBalance :: mode :- "accounts" :> Capture "last4" Text :> "opening-balance" :> ReqBody '[JSON] BalanceRequest :> Post '[JSON] ActionResult
   , addCheckpoint :: mode :- "accounts" :> Capture "last4" Text :> "checkpoints" :> ReqBody '[JSON] BalanceRequest :> Post '[JSON] ActionResult
   }

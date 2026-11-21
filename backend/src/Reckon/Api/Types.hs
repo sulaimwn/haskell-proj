@@ -39,6 +39,14 @@ module Reckon.Api.Types
   , SplitRequest (..)
   , AddPersonRequest (..)
   , AddRuleRequest (..)
+  , RuleView (..)
+  , RuleProblemView (..)
+  , PreviewEffectKind (..)
+  , PreviewRowView (..)
+  , RulePreviewView (..)
+  , CheckRuleRequest (..)
+  , RuleCheck (..)
+  , ApplyRuleRequest (..)
   , BalanceRequest (..)
   , ApiProblem (..)
   , typeScriptDeclarations
@@ -286,10 +294,79 @@ data AddPersonRequest = AddPersonRequest
   }
   deriving stock (Show, Eq)
 
+-- | A rule in the rule language (one line of text) and when it runs.
 data AddRuleRequest = AddRuleRequest
-  { descriptionContains :: Text
-  , account :: Text
+  { ruleText :: Text
   , priority :: Maybe Int
+  -- ^ Lower runs first. 100 if not given.
+  }
+  deriving stock (Show, Eq)
+
+-- | A saved rule. @problem@ is set only if the text no longer reads as a
+-- rule (the language changed since it was saved).
+data RuleView = RuleView
+  { ruleId :: Int
+  , ruleText :: Text
+  , priority :: Int
+  , problem :: Maybe Text
+  }
+  deriving stock (Show, Eq)
+
+-- | Where a rule's text went wrong. Line and column count from 1.
+data RuleProblemView = RuleProblemView
+  { line :: Int
+  , column :: Int
+  , message :: Text
+  }
+  deriving stock (Show, Eq)
+
+-- | What a rule would do to a row that already exists.
+data PreviewEffectKind
+  = EffectMove
+  | EffectAlreadyThere
+  | EffectOnNextPost
+  | EffectCannotChange
+  deriving stock (Show, Eq)
+
+data PreviewRowView = PreviewRowView
+  { rowId :: Int
+  , date :: Text
+  , description :: Text
+  , amountCents :: Int
+  , effect :: PreviewEffectKind
+  , detail :: Maybe Text
+  -- ^ For a move, the account it is in now. For a refusal, why.
+  }
+  deriving stock (Show, Eq)
+
+-- | The rows a rule matches among those already imported, counted by what
+-- would happen to them, with the newest rows listed.
+data RulePreviewView = RulePreviewView
+  { matched :: Int
+  , wouldMove :: Int
+  , alreadyThere :: Int
+  , onNextPost :: Int
+  , cannotChange :: Int
+  , rows :: [PreviewRowView]
+  }
+  deriving stock (Show, Eq)
+
+newtype CheckRuleRequest = CheckRuleRequest
+  { ruleText :: Text
+  }
+  deriving stock (Show, Eq)
+
+-- | The answer to "is this a rule?": either what's wrong and where, or the
+-- rule as the system will store it and what it would do to existing rows.
+data RuleCheck = RuleCheck
+  { problem :: Maybe RuleProblemView
+  , canonicalText :: Maybe Text
+  , preview :: Maybe RulePreviewView
+  }
+  deriving stock (Show, Eq)
+
+newtype ApplyRuleRequest = ApplyRuleRequest
+  { ruleText :: Text
   }
   deriving stock (Show, Eq)
 
@@ -335,6 +412,14 @@ $(deriveJSONAndTypeScript recordOptions ''SplitShare)
 $(deriveJSONAndTypeScript recordOptions ''SplitRequest)
 $(deriveJSONAndTypeScript recordOptions ''AddPersonRequest)
 $(deriveJSONAndTypeScript recordOptions ''AddRuleRequest)
+$(deriveJSONAndTypeScript recordOptions ''RuleView)
+$(deriveJSONAndTypeScript recordOptions ''RuleProblemView)
+$(deriveJSONAndTypeScript (enumOptions "Effect") ''PreviewEffectKind)
+$(deriveJSONAndTypeScript recordOptions ''PreviewRowView)
+$(deriveJSONAndTypeScript recordOptions ''RulePreviewView)
+$(deriveJSONAndTypeScript recordOptions ''CheckRuleRequest)
+$(deriveJSONAndTypeScript recordOptions ''RuleCheck)
+$(deriveJSONAndTypeScript recordOptions ''ApplyRuleRequest)
 $(deriveJSONAndTypeScript recordOptions ''BalanceRequest)
 $(deriveJSONAndTypeScript recordOptions ''ApiProblem)
 
@@ -371,6 +456,14 @@ typeScriptDeclarations =
     , getTypeScriptDeclarations (Proxy @SplitRequest)
     , getTypeScriptDeclarations (Proxy @AddPersonRequest)
     , getTypeScriptDeclarations (Proxy @AddRuleRequest)
+    , getTypeScriptDeclarations (Proxy @RuleView)
+    , getTypeScriptDeclarations (Proxy @RuleProblemView)
+    , getTypeScriptDeclarations (Proxy @PreviewEffectKind)
+    , getTypeScriptDeclarations (Proxy @PreviewRowView)
+    , getTypeScriptDeclarations (Proxy @RulePreviewView)
+    , getTypeScriptDeclarations (Proxy @CheckRuleRequest)
+    , getTypeScriptDeclarations (Proxy @RuleCheck)
+    , getTypeScriptDeclarations (Proxy @ApplyRuleRequest)
     , getTypeScriptDeclarations (Proxy @BalanceRequest)
     , getTypeScriptDeclarations (Proxy @ApiProblem)
     ]

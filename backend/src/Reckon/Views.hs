@@ -12,6 +12,7 @@ module Reckon.Views
   , receivablesView
   , reviewQueue
   , ledgerAccountViews
+  , rulePreviewView
   ) where
 
 import Control.Applicative ((<|>))
@@ -41,6 +42,7 @@ import Reckon.Posting (ReviewItem (..), reviewItems)
 import Reckon.Posting.Classify (ReviewReason (..))
 import Reckon.Reconcile (ReconciliationReport (..), bankLedgerType, reconcileAccount, renderFindings)
 import Reckon.Reconcile.Explain (Finding (..), ReconciliationInputs (..))
+import Reckon.Rules.History (Effect (..), HistoryRow (..), PreviewRow (..))
 import Reckon.Screenshot.Store (OpenProvisional (..), openProvisionalRows)
 
 wireCents :: Cents -> Int
@@ -252,3 +254,35 @@ ledgerAccountViews :: (MonadIO m) => SqlPersistT m [LedgerAccountView]
 ledgerAccountViews = do
   accounts <- selectList [] [Asc LedgerAccountName]
   pure [LedgerAccountView {name = ledgerAccountName account, accountType = accountTypeToText (ledgerAccountAccountType account)} | Entity _ account <- accounts]
+
+-- | What a rule would do to the rows already imported: counts by effect,
+-- and the newest rows (the list is capped; the counts are not).
+rulePreviewView :: [PreviewRow] -> RulePreviewView
+rulePreviewView previewed =
+  RulePreviewView
+    { matched = length previewed
+    , wouldMove = count (\case WouldMoveFrom _ -> True; _ -> False)
+    , alreadyThere = count (== AlreadyThere)
+    , onNextPost = count (== AppliesWhenPosted)
+    , cannotChange = count (\case CannotChange _ -> True; _ -> False)
+    , rows = map rowView (take previewRowLimit previewed)
+    }
+  where
+    count predicate = length (filter (predicate . (.effect)) previewed)
+    rowView preview =
+      let (kind, detail) = case preview.effect of
+            WouldMoveFrom current -> (EffectMove, Just current)
+            AlreadyThere -> (EffectAlreadyThere, Nothing)
+            AppliesWhenPosted -> (EffectOnNextPost, Nothing)
+            CannotChange why -> (EffectCannotChange, Just why)
+       in PreviewRowView
+            { rowId = fromIntegral (fromSqlKey preview.row.rowId)
+            , date = isoDay preview.row.date
+            , description = preview.row.description
+            , amountCents = wireCents preview.row.amount
+            , effect = kind
+            , detail
+            }
+
+previewRowLimit :: Int
+previewRowLimit = 200

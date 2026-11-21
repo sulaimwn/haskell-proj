@@ -116,7 +116,7 @@ The same loop as the command line below, with buttons:
 3. **Accounts → Record a statement** enters the statement's closing balance as the bank prints it
    (money in the account, or owed on a card); the card then shows *Reconciled* or a *Gap* with the
    reason. Set an **opening balance** from a statement dated before your first imported row.
-4. **Transactions → Change…** moves a posted row to another account or splits it with friends;
+4. **Rules** writes categorization rules (with a live preview); **Transactions → Change…** moves a posted row to another account or splits it with friends;
    **Receivables → Add a friend** first. **Spending** shows your share by category.
 5. **Import → Screenshots** reads screenshots of the RBC app (needs `ANTHROPIC_API_KEY`);
    they appear as provisional rows on **Review** until the bank's CSV confirms them.
@@ -170,6 +170,8 @@ them). It builds the CLI if needed and uses the dev database.
    scripts/reckon.sh add-rule PAYROLL income:job
    scripts/reckon.sh add-rule "TIM HORTONS" expense:coffee
    scripts/reckon.sh add-rule HYDRO expense:utilities 50     # lower priority number runs first (default 100)
+   # or in the rule language (see "Writing rules" below):
+   scripts/reckon.sh add-rule 'when description contains "UBER" and amount < -50.00 then categorize expense:transport'
    ```
 
    Account names start with `expense:`, `income:`, `asset:`, `liability:`,
@@ -232,6 +234,30 @@ them). It builds the CLI if needed and uses the dev database.
 
 `make db-psql` then `SELECT * FROM journal_entries ORDER BY id DESC LIMIT
 20;` shows the raw entries if you want to look.
+
+## Writing rules
+
+A rule is one line: `when CONDITION [and CONDITION ...] then ACTION`. In the web UI use the
+**Rules** page, which reads the rule as you type, points at a mistake (line and column), and shows
+which rows you've already imported it would match and what would happen to each. On the command line:
+
+```bash
+scripts/reckon.sh add-rule 'when description contains "TIM HORTONS" then categorize expense:coffee'
+scripts/reckon.sh rules                        # list them, in the order they run
+scripts/reckon.sh check-rule 'when ...'        # read it and preview the rows it would move (saves nothing)
+scripts/reckon.sh apply-rule 'when ...'        # move the posted rows it would move (reverse and re-post)
+scripts/reckon.sh delete-rule 3
+```
+
+| Part | Forms |
+|---|---|
+| Conditions | `description contains "TEXT"`, `description starts with "TEXT"`, `description ends with "TEXT"` (case and spacing don't matter); `amount < 50.00` (also `<= > >= = !=`; money out is negative, so `amount < 0` is a payment); `account is chequing`, `savings` or `credit card` |
+| Actions | `categorize expense:coffee`; `split expense:food equally with alex, sam` (money out only; the friends must already be added) |
+| Order | A lower priority number runs first (default 100); the first rule whose conditions all hold wins |
+
+Saving a rule only affects rows posted from now on. `check-rule` shows what it would do to rows
+already imported, and `apply-rule` (or the UI's "Save and move N posted rows") moves the posted
+ones. The reasoning is in DECISIONS D067-D069.
 
 ## Shared expenses
 
@@ -313,7 +339,7 @@ Run `make` with no arguments to see them all.
 | `make reconcile` | Compare the ledger with every recorded statement balance, and explain any gap |
 | `make provisional` | Rows read from screenshots that no bank export has confirmed yet |
 | `make owed` | What each person you share expenses with owes you |
-| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `recategorize`, `add-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
+| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `recategorize`, `add-rule`, `rules`, `check-rule`, `apply-rule`, `delete-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
 | `make db-psql` | psql shell on the dev database |
 | `make db-down` | Stop Postgres (data is kept in a Docker volume) |
 | `make db-destroy` | Delete the database volume, including everything imported (asks first) |

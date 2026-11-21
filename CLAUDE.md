@@ -46,6 +46,9 @@ misled about the current state?* If yes, fix the docs.
 
 - **Descriptive names** (`statementBalanceCents`, not `sb`), and short comments
   that explain *why* where it isn't obvious.
+- **Rules are text** (D067-D069): `posting_rules.rule_text` is the only copy of a rule, always the
+  canonical `renderRule` of a parsed rule. Add a feature to the language by changing `Rules.Language`
+  (parser, renderer, the round-trip generator in `LanguageSpec`) and `Rules.Eval` together.
 - **Money is never floating point.** `Cents` newtype over `Int64` in Haskell,
   `BIGINT` in SQL, integer cents in TypeScript. Format only at display time.
 - **Make invalid states unrepresentable:** a newtype per ID type, and separate
@@ -103,7 +106,7 @@ make reconcile  # compare the ledger with every recorded statement balance
 make owed       # what friends owe you
 make provisional  # rows read from screenshots that no bank CSV has confirmed yet
 cd frontend && npm test   # frontend tests (also part of make check)
-scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, rules, check-rule, apply-rule, delete-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -166,6 +169,12 @@ docs/        see the table above
 - Frontend component tests use `fakeBackend` (`src/testing.tsx`): it answers `"METHOD /path"`
   from a table and fails the test on an unexpected request. Assert on the JSON a form sent, not
   just on what the page showed afterwards.
+- Rules are global, like people, and `postPendingRows` posts every unposted row, so a rule in a test
+  must only match its own scenario's rows: put the scenario's tag in the description text it
+  matches (`bistro scenario` in RulesSpec) and in its account and friend names.
+- `Classify.Rule` is the planner's *resolved* rule (account ids, `Outcome`); `Rules.Language.Rule` is
+  what the text says (account names). `Rules.loadRules` turns one into the other. Tests of the pure
+  planner build `Classify.Rule` directly (`containsRule` for the simple case).
 - Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
   and IO in their callers. Pure planners are generic in their id and
   account types so tests can use `Int` and `Text`.

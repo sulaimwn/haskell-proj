@@ -78,7 +78,7 @@ and `import_review_items`. `raw_bank_rows` uses `occurrence` instead of
 `position_within_day`, and omits status and screenshot-only columns for now
 (DECISIONS D029, D035).
 Phase 3 added `journal_entry_evidence` (the `raw_row_links` below),
-`categorization_rules`, `statement_checkpoints` and `opening_balances`.
+`posting_rules` (was `categorization_rules` before Phase 7), `statement_checkpoints` and `opening_balances`.
 Whether a row is posted is a query over the evidence links, not a status
 column (see [ARCHITECTURE.md](ARCHITECTURE.md#posting-and-reconciliation-phase-3)).
 
@@ -94,7 +94,7 @@ column (see [ARCHITECTURE.md](ARCHITECTURE.md#posting-and-reconciliation-phase-3
 | `statement_checkpoints` | bank_account_id, as_of_date, statement_balance_cents |
 | `screenshot_uploads` | sha256, uploaded_at, model id used, raw extraction JSON, status |
 | `jobs` | Postgres-backed job queue (`FOR UPDATE SKIP LOCKED`), retries, backoff |
-| `categorization_rules` | stored rules for categorizing and splitting transactions |
+| `posting_rules` | stored rules (one line of the rule language each) for categorizing and splitting transactions |
 
 ## Phases
 
@@ -262,6 +262,13 @@ Deferred: paging past 200 rows, listing/editing people and rules, exact-amount
 splits in the form, authentication (D065).
 
 ### Phase 7: Scheduled jobs and rules
+
+**As built so far (rule language, DECISIONS D067-D069):** a one-line rule language (`when
+description contains "UBER" and amount < -50.00 then categorize expense:transport`, or `... then
+split expense:food equally with alex, sam`), parsed with megaparsec in `Reckon.Rules.Language`, evaluated
+in `Reckon.Rules.Eval`, stored as canonical text in `posting_rules` (replacing `categorization_rules`),
+validated with line and column errors shown in the Rules page, previewed against existing rows as you
+type, and applied to the past only on request. The job queue and recurring checks are the second half.
 
 - The Postgres job queue runs recurring checks: statement periods with no
   checkpoint, provisional entries with no CSV confirmation after N days, and

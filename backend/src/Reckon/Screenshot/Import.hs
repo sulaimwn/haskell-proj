@@ -33,8 +33,9 @@ import Reckon.Anthropic (ClientError, Extractor, ImageInput (..), detectMediaTyp
 import Reckon.Bank (BankAccountKind (..), Last4)
 import Reckon.Database.Schema
 import Reckon.Import (sha256Hex)
-import Reckon.Posting (loadRules, wellKnownAccounts)
-import Reckon.Posting.Classify (EvidenceRow (..), Rule (..), WellKnownAccounts (..), matchingRule)
+import Reckon.Posting (wellKnownAccounts)
+import Reckon.Rules (loadRules)
+import Reckon.Posting.Classify (EvidenceRow (..), WellKnownAccounts (..), matchingRule, ruleAccount)
 import Reckon.Reconcile (findBankAccountByLast4)
 import Reckon.Screenshot.Align (AlignWarning (..))
 import Reckon.Screenshot.Extraction (ExtractedRow (..), ExtractionError, parseExtraction, renderExtractionError)
@@ -107,7 +108,10 @@ importScreenshots pool extract modelId last4 takenOn files = runExceptT $ do
             kind = bankAccountAccountKind (entityVal account)
             counterFor row =
               case matchingRule rules (asEvidence bankLedger kind row) of
-                Just rule -> rule.account
+                -- A split rule puts everything in its category for now: the
+                -- screenshot row is provisional, and the bank's own row will be
+                -- posted (and split) when it arrives.
+                Just rule -> ruleAccount rule
                 Nothing
                   | row.amount < mempty -> wellKnown.uncategorizedExpense
                   | otherwise -> wellKnown.uncategorizedIncome

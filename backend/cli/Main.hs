@@ -7,6 +7,7 @@ module Main (main) where
 import Data.ByteString qualified as ByteString
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Char (toLower)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Data.Time (Day, getCurrentTime, utctDay)
@@ -23,7 +24,10 @@ import Reckon.Import.RbcCsv (parseCents)
 import Reckon.Money (Cents, renderCents)
 import Reckon.Messages (describeCheckpointError, describeOpeningBalanceError, describePersonError, describePostingError, describeReleaseError, describeRuleError, describeSplitRowError)
 import Reckon.People (addPerson, renderOwed, whoOwesWhat)
-import Reckon.Posting (addCategorizationRule, postPendingRows, postRowManually, recategorizeRow, renderPostingSummary)
+import Reckon.Posting (postPendingRows, postRowManually, recategorizeRow, renderPostingSummary)
+import Reckon.Rules (StoredRule (..), addContainsRule, addRule, checkRule, deleteRule, loadStoredRules)
+import Reckon.Rules.History (applyRule, loadHistory, previewRule, renderPreview, ApplyOutcome (..))
+import Reckon.Rules.Language (renderProblem)
 import Reckon.Reconcile
 import Reckon.Report (renderSpending, spendingByAccount)
 import Reckon.Screenshot.Eval (evaluateScreenshots)
@@ -44,6 +48,12 @@ usage =
     , "  post                                   post imported rows to the journal (make post)"
     , "  post-row ROW_ID ACCOUNT                settle a row left for review, e.g. post-row 42 asset:clearing"
     , "  add-rule TEXT ACCOUNT [PRIORITY]       e.g. add-rule \"TIM HORTONS\" expense:coffee"
+    , "  add-rule 'RULE' [PRIORITY]             a rule in the rule language, e.g."
+    , "                                         'when description contains \"UBER\" and amount < -50.00 then categorize expense:transport'"
+    , "  rules                                  list the rules, in the order they run"
+    , "  check-rule 'RULE'                      read a rule and preview which imported rows it would move"
+    , "  apply-rule 'RULE'                      move the posted rows the rule would move (reverse and re-post)"
+    , "  delete-rule RULE_ID                    remove a rule (posted rows keep their account)"
     , "  recategorize ROW_ID ACCOUNT            move a posted row to another account (not transfer legs)"
     , "  add-person NAME MATCH_TEXT             someone you share costs with, e.g. add-person alex \"ALEX SMITH\""
     , "  split-row ROW_ID ACCOUNT equal NAME... split a payment equally between you and these people"
@@ -136,10 +146,38 @@ main = do
       withDatabase $ \pool -> do
         accounts <- runSqlPool (spendingByAccount from to) pool
         Text.putStr (renderSpending from to accounts)
-    ["add-rule", ruleText, accountName] -> withDatabase (addRule ruleText accountName 100)
+    -- One argument is a rule in the rule language; two or three are the
+    -- original "TEXT ACCOUNT [PRIORITY]".
+    ["add-rule", ruleText] -> withDatabase (addRuleText ruleText 100)
+    ["add-rule", ruleText, priorityOrAccount] -> case readMaybe priorityOrAccount of
+      Just priority | looksLikeRule ruleText -> withDatabase (addRuleText ruleText priority)
+      _ -> withDatabase (addSimpleRule ruleText priorityOrAccount 100)
     ["add-rule", ruleText, accountName, priorityText] -> case readMaybe priorityText of
-      Just priority -> withDatabase (addRule ruleText accountName priority)
+      Just priority -> withDatabase (addSimpleRule ruleText accountName priority)
       Nothing -> die ("PRIORITY must be a whole number, got " <> show priorityText)
+    ["rules"] -> withDatabase $ \pool -> do
+      stored <- runSqlPool loadStoredRules pool
+      Text.putStr (renderStoredRules stored)
+    ["delete-rule", numberText] -> case readMaybe numberText of
+      Just number -> withDatabase $ \pool -> runOrDie pool $ do
+        result <- deleteRule number
+        pure (either (Left . describeRuleError) (const (Right "Deleted. Rows already posted keep the account they were given.")) result)
+      Nothing -> die ("RULE_ID must be a whole number, got " <> show numberText)
+    ["check-rule", ruleText] -> withDatabase $ \pool -> do
+      checked <- runSqlPool (checkRule (Text.pack ruleText)) pool
+      case checked of
+        Left problem -> Text.putStrLn (renderProblem problem) >> exitFailure
+        Right rule -> do
+          history <- runSqlPool loadHistory pool
+          Text.putStr (renderPreview (previewRule rule history))
+    ["apply-rule", ruleText] -> withDatabase $ \pool -> do
+      checked <- runSqlPool (checkRule (Text.pack ruleText)) pool
+      case checked of
+        Left problem -> Text.putStrLn (renderProblem problem) >> exitFailure
+        Right rule -> do
+          outcome <- runSqlPool (applyRule rule) pool
+          putStrLn ("Moved " <> show outcome.moved <> " row(s).")
+          mapM_ (\(date, description, why) -> Text.putStrLn ("  not moved: " <> showText date <> "  " <> description <> ": " <> why)) outcome.refused
     ["opening-balance", last4Text, dateText, amountText] -> do
       (last4, date, amount) <- parseAccountDateAmount last4Text dateText amountText
       withDatabase $ \pool -> runOrDie pool $ withBankAccount last4 $ \account -> do
@@ -190,16 +228,33 @@ importFile path pool = do
     Right outcome -> Text.putStr (renderImportOutcome outcome) >> putStrLn "Next: make post"
     Left importError -> Text.putStr (renderImportError importError) >> exitFailure
 
-addRule :: String -> String -> Int -> ConnectionPool -> IO ()
-addRule ruleText accountName priority pool = runOrDie pool $ do
-  result <- addCategorizationRule (Text.pack ruleText) (Text.pack accountName) priority
+addRuleText :: String -> Int -> ConnectionPool -> IO ()
+addRuleText ruleText priority pool = runOrDie pool $ do
+  result <- addRule (Text.pack ruleText) priority
   pure $ case result of
-    Right _ ->
-      Right
-        ( "Added: descriptions containing \"" <> Text.toUpper (Text.pack ruleText) <> "\" go to " <> Text.pack accountName
-            <> ". It applies to rows posted from now on."
-        )
+    Right saved -> Right ("Saved: " <> saved.ruleText <> "\nIt applies to rows posted from now on. To change rows already posted: scripts/reckon.sh check-rule '...' to preview, apply-rule to apply.")
     Left problem -> Left (describeRuleError problem)
+
+-- | The original two-part form: @add-rule TEXT ACCOUNT [PRIORITY]@.
+addSimpleRule :: String -> String -> Int -> ConnectionPool -> IO ()
+addSimpleRule ruleText accountName priority pool = runOrDie pool $ do
+  result <- addContainsRule (Text.pack ruleText) (Text.pack accountName) priority
+  pure $ case result of
+    Right saved -> Right ("Saved: " <> saved.ruleText <> "\nIt applies to rows posted from now on.")
+    Left problem -> Left (describeRuleError problem)
+
+-- | A single argument that starts like a rule is one; anything else is the
+-- text of a simple rule whose account is missing.
+looksLikeRule :: String -> Bool
+looksLikeRule = (== ["when"]) . take 1 . words . map toLower
+
+renderStoredRules :: [StoredRule] -> Text
+renderStoredRules [] = "No rules yet. Add one: scripts/reckon.sh add-rule 'when description contains \"HYDRO\" then categorize expense:utilities'\n"
+renderStoredRules stored =
+  Text.unlines
+    [ "  #" <> showText rule.ruleId <> "  (priority " <> showText rule.priority <> ")  " <> rule.ruleText <> either (\problem -> "   <- no longer reads as a rule: " <> renderProblem problem) (const "") rule.parsed
+    | rule <- stored
+    ]
 
 parseAccountDateAmount :: String -> String -> String -> IO (Last4, Day, Cents)
 parseAccountDateAmount last4Text dateText amountText = do
