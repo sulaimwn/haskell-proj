@@ -143,7 +143,7 @@ database; reversals; balances as of a date.
 **Skeleton (Phase 0):** `make dev`, `/api/health` with a live badge,
 TypeScript types generated from Haskell, the privacy guard, CI.
 
-Tests: 214 backend examples (hspec + hedgehog properties, including model-based and
+Tests: 215 backend examples (hspec + hedgehog properties, including model-based and
 database properties; none call the real API) and 29 frontend tests (Vitest, with a fake
 `fetch`). `make check` passes.
 
