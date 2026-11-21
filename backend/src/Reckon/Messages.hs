@@ -8,6 +8,8 @@ module Reckon.Messages
   , describeSplitError
   , describePersonError
   , describeRuleError
+  , describeDueDateError
+  , describeReminderError
   , describeOpeningBalanceError
   , describeCheckpointError
   , describeReleaseError
@@ -18,6 +20,7 @@ import Data.Text qualified as Text
 import Reckon.Money (renderCents)
 import Reckon.People (PersonError (..))
 import Reckon.Posting (ManualPostingError (..))
+import Reckon.Reminders (DueDateError (..), ReminderError (..))
 import Reckon.Rules (RuleError (..))
 import Reckon.Rules.Language (renderProblem)
 import Reckon.Posting.Split (SplitError (..))
@@ -66,6 +69,18 @@ describeRuleError = \case
   RuleNotFound -> "There is no rule with that number."
   InvalidRule problem -> "That isn't a rule. " <> renderProblem problem
   UnknownAccountPrefix name -> "\"" <> name <> "\" must start with expense:, income:, asset:, liability:, receivable: or equity:"
+
+describeDueDateError :: DueDateError -> Text
+describeDueDateError = \case
+  EmptyDueDateLabel -> "A due date needs a label, like \"Visa payment\"."
+  DayOfMonthOutOfRange day -> "The day of the month must be from 1 to 31, not " <> Text.pack (show day) <> "."
+  WarnDaysOutOfRange days -> "The warning must be from 0 to 28 days ahead, not " <> Text.pack (show days) <> "."
+  DueDateNotFound -> "There is no due date with that number."
+
+describeReminderError :: ReminderError -> Text
+describeReminderError = \case
+  ReminderNotFound -> "There is no reminder with that number."
+  ReminderNotOpen -> "That reminder is no longer open."
 
 describeOpeningBalanceError :: OpeningBalanceError -> Text
 describeOpeningBalanceError = \case

@@ -16,7 +16,7 @@
 module Reckon.Database.Schema where
 
 import Data.Text (Text)
-import Data.Time (Day)
+import Data.Time (Day, UTCTime)
 import Database.Persist.TH (mkPersist, persistLowerCase, share, sqlSettings)
 import Reckon.Bank (BankAccountKind, Last4)
 import Reckon.Import.Dedupe (Fingerprint, ReviewItemKind)
@@ -99,6 +99,31 @@ PostingRule sql=posting_rules
   ruleText Text
   priority Int
   UniquePostingRule ruleText
+  deriving Show Eq
+
+Job sql=jobs
+  kind Text
+  runAt UTCTime
+  status Text
+  attempts Int
+  lockedAt UTCTime Maybe
+  finishedAt UTCTime Maybe
+  lastError Text Maybe
+  deriving Show Eq
+
+StoredReminder sql=reminders
+  kind Text
+  subject Text
+  message Text
+  detectedAt UTCTime
+  resolvedAt UTCTime Maybe
+  dismissedAt UTCTime Maybe
+  deriving Show Eq
+
+DueDate sql=due_dates
+  label Text
+  dayOfMonth Int
+  warnDays Int
   deriving Show Eq
 
 StatementCheckpoint sql=statement_checkpoints

@@ -28,8 +28,8 @@ import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
-import Data.Time (Day, addDays, getCurrentTime, utctDay)
-import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Time (Day, UTCTime, addDays, utctDay)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Version (showVersion)
 import Database.Persist.Sql (Entity, SqlPersistT, runSqlPool, toSqlKey)
 import Network.Wai (Application)
@@ -47,7 +47,10 @@ import Reckon.Messages
 import Reckon.Money (Cents (..))
 import Reckon.People qualified as People
 import Reckon.Posting qualified as Posting
+import Reckon.Checks qualified as Checks
 import Reckon.Reconcile qualified as Reconcile
+import Reckon.Reminders (ReminderItem (..))
+import Reckon.Reminders qualified as Reminders
 import Reckon.Rules qualified as Rules
 import Reckon.Rules (StoredRule (..))
 import Reckon.Rules.History qualified as History
@@ -86,6 +89,11 @@ server =
     , checkRule = postCheckRule
     , applyRule = postApplyRule
     , deleteRule = \ruleNumber _ -> postDeleteRule ruleNumber
+    , reminders = getReminders
+    , checkReminders = \_ -> postCheckReminders
+    , dismissReminder = \reminderNumber _ -> postDismissReminder reminderNumber
+    , addDueDate = postAddDueDate
+    , deleteDueDate = \dueDateNumber _ -> postDeleteDueDate dueDateNumber
     , setOpeningBalance = postOpeningBalance
     , addCheckpoint = postCheckpoint
     }
@@ -103,8 +111,12 @@ runDb action = do
   pool <- asks (.databasePool)
   liftIO (runSqlPool action pool)
 
+-- | The server's clock (an input, D072).
+clockTime :: AppM UTCTime
+clockTime = asks (.currentTime) >>= liftIO
+
 today :: AppM Day
-today = liftIO (utctDay <$> getCurrentTime)
+today = utctDay <$> clockTime
 
 -- | Stops the request with this status and an 'ApiProblem' body.
 refuse :: ServerError -> Text -> AppM a
@@ -290,6 +302,52 @@ postDeleteRule ruleNumber = do
   case result of
     Right () -> pure ActionResult {message = "Deleted the rule.", details = ["Rows already posted keep the account they were given."]}
     Left problem -> refuse err404 (describeRuleError problem)
+
+getReminders :: AppM RemindersResponse
+getReminders = do
+  (items, due, checked) <- runDb ((,,) <$> Reminders.openReminders <*> Reminders.loadDueDates <*> Reminders.lastCheckedAt)
+  pure
+    RemindersResponse
+      { reminders =
+          [ ReminderView {reminderId = fromIntegral item.reminderId, kind = kindTag item.kind, message = item.message, detectedAt = Text.pack (iso8601Show item.detectedAt)}
+          | item <- items
+          ]
+      , dueDates = [DueDateView {dueDateId = fromIntegral facts.dueDateId, label = facts.label, dayOfMonth = facts.dayOfMonth, warnDays = facts.warnDays} | facts <- due]
+      , lastCheckedAt = Text.pack . iso8601Show <$> checked
+      }
+  where
+    kindTag = \case
+      Checks.StatementMissing -> ReminderStatementMissing
+      Checks.ProvisionalStale -> ReminderProvisionalStale
+      Checks.DueSoon -> ReminderDueSoon
+
+postCheckReminders :: AppM ActionResult
+postCheckReminders = do
+  checkedAt <- clockTime
+  summary <- runDb (Reminders.checkNow checkedAt <* Reminders.recordManualRun checkedAt)
+  pure (resultFrom (Reminders.renderCheckSummary summary))
+
+postDismissReminder :: Int64 -> AppM ActionResult
+postDismissReminder reminderNumber = do
+  dismissedAt <- clockTime
+  result <- runDb (Reminders.dismissReminder dismissedAt reminderNumber)
+  case result of
+    Right () -> pure ActionResult {message = "Dismissed. It stays hidden while it is still true, and goes away on its own when it isn't.", details = []}
+    Left problem -> refuse err404 (describeReminderError problem)
+
+postAddDueDate :: AddDueDateRequest -> AppM ActionResult
+postAddDueDate request = do
+  result <- runDb (Reminders.addDueDate request.label request.dayOfMonth request.warnDays)
+  case result of
+    Right _ -> pure ActionResult {message = "Added " <> Text.strip request.label <> ", on day " <> Text.pack (show request.dayOfMonth) <> " of every month.", details = ["You'll be reminded " <> Text.pack (show (fromMaybe 5 request.warnDays)) <> " days ahead."]}
+    Left problem -> refuse err422 (describeDueDateError problem)
+
+postDeleteDueDate :: Int64 -> AppM ActionResult
+postDeleteDueDate dueDateNumber = do
+  result <- runDb (Reminders.deleteDueDate dueDateNumber)
+  case result of
+    Right () -> pure ActionResult {message = "Deleted the due date.", details = []}
+    Left problem -> refuse err404 (describeDueDateError problem)
 
 postOpeningBalance :: Text -> BalanceRequest -> AppM ActionResult
 postOpeningBalance last4Text request = do

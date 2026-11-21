@@ -259,6 +259,24 @@ Saving a rule only affects rows posted from now on. `check-rule` shows what it w
 already imported, and `apply-rule` (or the UI's "Save and move N posted rows") moves the posted
 ones. The reasoning is in DECISIONS D067-D069.
 
+## Reminders and due dates
+
+The server checks for things you might forget once a day, in the background (a job in Postgres, D070):
+a month with no statement balance recorded, screenshot rows the bank's export hasn't confirmed after a
+week, and a due date coming up. They show on the **Review** page (dismiss one, or press *Check now*), and
+on the command line:
+
+```bash
+scripts/reckon.sh run-checks                          # run the checks now
+scripts/reckon.sh reminders                           # what is open
+scripts/reckon.sh add-due-date "Visa payment" 15 5    # the 15th of every month, remind 5 days ahead
+scripts/reckon.sh due-dates
+scripts/reckon.sh delete-due-date 2
+```
+
+A reminder goes away by itself when its cause does (record the statement, import the CSV, the due date
+passes). Months shorter than the day (the 31st in April) use their last day.
+
 ## Shared expenses
 
 For payments you share with friends (dinner, groceries, a rented cabin).
@@ -330,7 +348,7 @@ Run `make` with no arguments to see them all.
 | `make dev` | Start everything (see above) |
 | `make test` | Backend test suite. Recreates and migrates `reckon_test` first (the journal is append-only, so tests can't clean up) |
 | `cd frontend && npm test` | Frontend tests (Vitest). Also run by `make check` and CI. `npm run lint`, `npm run typecheck` and `npm run build` are the other checks |
-| `make check` | Everything CI runs. **Run before pushing.** |
+| `make check` | Everything CI runs. **Run before pushing.** It builds the backend with `-Werror` in its own directory (`backend/dist-newstyle-werror`), so the first run after a change to the toolchain compiles the project twice (D073) |
 | `make codegen` | Regenerate `frontend/src/api/generated.ts` after changing API types |
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |
 | `make migrate` | Apply pending migrations to the dev and test databases |
@@ -339,7 +357,7 @@ Run `make` with no arguments to see them all.
 | `make reconcile` | Compare the ledger with every recorded statement balance, and explain any gap |
 | `make provisional` | Rows read from screenshots that no bank export has confirmed yet |
 | `make owed` | What each person you share expenses with owes you |
-| `scripts/reckon.sh COMMAND ...` | Any CLI command: `post-row`, `recategorize`, `add-rule`, `rules`, `check-rule`, `apply-rule`, `delete-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
+| `scripts/reckon.sh COMMAND ...` | Any CLI command: `run-checks`, `reminders`, `add-due-date`, `post-row`, `recategorize`, `add-rule`, `rules`, `check-rule`, `apply-rule`, `delete-rule`, `add-person`, `split-row`, `spending`, `opening-balance`, `checkpoint` (no arguments lists them) |
 | `make db-psql` | psql shell on the dev database |
 | `make db-down` | Stop Postgres (data is kept in a Docker volume) |
 | `make db-destroy` | Delete the database volume, including everything imported (asks first) |

@@ -31,12 +31,14 @@ library
     Reckon.Api.TypeScript
     Reckon.App
     Reckon.Bank
+    Reckon.Checks
     Reckon.Config
     Reckon.Database
     Reckon.Database.Schema
     Reckon.Import
     Reckon.Import.Dedupe
     Reckon.Import.RbcCsv
+    Reckon.Jobs
     Reckon.Ledger
     Reckon.Ledger.AccountType
     Reckon.Ledger.Entry
@@ -48,6 +50,7 @@ library
     Reckon.Posting.Split
     Reckon.Reconcile
     Reckon.Reconcile.Explain
+    Reckon.Reminders
     Reckon.Report
     Reckon.Rules
     Reckon.Rules.Eval
@@ -106,6 +109,7 @@ executable reckon-server
   build-depends:
     , reckon
     , text
+    , time
     , wai-extra
     , warp
 
@@ -138,12 +142,14 @@ test-suite reckon-test
   main-is:        Main.hs
   other-modules:
     Reckon.AnthropicSpec
+    Reckon.ChecksSpec
     Reckon.ApiSpec
     Reckon.Api.TypesSpec
     Reckon.ConfigSpec
     Reckon.Import.DedupeSpec
     Reckon.Import.RbcCsvSpec
     Reckon.ImportSpec
+    Reckon.JobsSpec
     Reckon.Ledger.EntrySpec
     Reckon.LedgerSpec
     Reckon.Posting.ClassifySpec

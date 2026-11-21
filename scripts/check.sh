@@ -16,13 +16,19 @@ else
   echo "shellcheck not installed; skipping (CI runs it). Install: sudo apt-get install shellcheck"
 fi
 
+# A separate build directory: GHC does not recompile a module when only
+# warning flags change, so in the normal dist-newstyle a module compiled earlier
+# (say by `make test`) hides its warnings from -Werror. This directory only
+# ever holds objects compiled with -Werror, as CI's clean build does.
+werror_builddir=dist-newstyle-werror
+
 log "Backend: build with warnings as errors"
-(cd backend && cabal build all --ghc-options=-Werror)
+(cd backend && cabal build all --enable-tests --ghc-options=-Werror --builddir="$werror_builddir")
 
 scripts/migrate.sh >/dev/null
 recreate_test_database
 log "Backend: tests"
-(cd backend && cabal test all --ghc-options=-Werror --test-show-details=direct)
+(cd backend && cabal test all --ghc-options=-Werror --builddir="$werror_builddir" --test-show-details=direct)
 
 log "Generated TypeScript is up to date"
 scripts/codegen.sh --check

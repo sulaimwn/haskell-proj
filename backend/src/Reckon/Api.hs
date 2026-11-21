@@ -65,6 +65,13 @@ data Routes mode = Routes
   , applyRule :: mode :- "rules" :> "apply" :> ReqBody '[JSON] ApplyRuleRequest :> Post '[JSON] ActionResult
   -- ^ Applies a rule to the rows already posted that it would move.
   , deleteRule :: mode :- "rules" :> Capture "id" Int64 :> "delete" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
+  , reminders :: mode :- "reminders" :> Get '[JSON] RemindersResponse
+  -- ^ What the recurring checks found, the configured due dates, and when the checks last ran.
+  , checkReminders :: mode :- "reminders" :> "check" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
+  -- ^ Run the checks now instead of waiting for the schedule.
+  , dismissReminder :: mode :- "reminders" :> Capture "id" Int64 :> "dismiss" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
+  , addDueDate :: mode :- "due-dates" :> ReqBody '[JSON] AddDueDateRequest :> Post '[JSON] ActionResult
+  , deleteDueDate :: mode :- "due-dates" :> Capture "id" Int64 :> "delete" :> ReqBody '[JSON] Value :> Post '[JSON] ActionResult
   , setOpeningBalance :: mode :- "accounts" :> Capture "last4" Text :> "opening-balance" :> ReqBody '[JSON] BalanceRequest :> Post '[JSON] ActionResult
   , addCheckpoint :: mode :- "accounts" :> Capture "last4" Text :> "checkpoints" :> ReqBody '[JSON] BalanceRequest :> Post '[JSON] ActionResult
   }

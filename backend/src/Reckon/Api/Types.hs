@@ -47,6 +47,11 @@ module Reckon.Api.Types
   , CheckRuleRequest (..)
   , RuleCheck (..)
   , ApplyRuleRequest (..)
+  , ReminderKindTag (..)
+  , ReminderView (..)
+  , DueDateView (..)
+  , RemindersResponse (..)
+  , AddDueDateRequest (..)
   , BalanceRequest (..)
   , ApiProblem (..)
   , typeScriptDeclarations
@@ -370,6 +375,49 @@ newtype ApplyRuleRequest = ApplyRuleRequest
   }
   deriving stock (Show, Eq)
 
+-- | What kind of thing a recurring check found.
+data ReminderKindTag
+  = ReminderStatementMissing
+  | ReminderProvisionalStale
+  | ReminderDueSoon
+  deriving stock (Show, Eq)
+
+-- | Something the recurring checks want a person to know. The message is
+-- ready to show.
+data ReminderView = ReminderView
+  { reminderId :: Int
+  , kind :: ReminderKindTag
+  , message :: Text
+  , detectedAt :: Text
+  -- ^ ISO 8601, UTC.
+  }
+  deriving stock (Show, Eq)
+
+-- | A day of every month someone should be reminded of.
+data DueDateView = DueDateView
+  { dueDateId :: Int
+  , label :: Text
+  , dayOfMonth :: Int
+  , warnDays :: Int
+  }
+  deriving stock (Show, Eq)
+
+data RemindersResponse = RemindersResponse
+  { reminders :: [ReminderView]
+  , dueDates :: [DueDateView]
+  , lastCheckedAt :: Maybe Text
+  -- ^ When the checks last ran (by the schedule or by hand), ISO 8601, UTC.
+  }
+  deriving stock (Show, Eq)
+
+data AddDueDateRequest = AddDueDateRequest
+  { label :: Text
+  , dayOfMonth :: Int
+  , warnDays :: Maybe Int
+  -- ^ Days ahead to start reminding. 5 if not given.
+  }
+  deriving stock (Show, Eq)
+
 -- | A balance on a date: an opening balance or a statement checkpoint.
 data BalanceRequest = BalanceRequest
   { date :: Text
@@ -420,6 +468,11 @@ $(deriveJSONAndTypeScript recordOptions ''RulePreviewView)
 $(deriveJSONAndTypeScript recordOptions ''CheckRuleRequest)
 $(deriveJSONAndTypeScript recordOptions ''RuleCheck)
 $(deriveJSONAndTypeScript recordOptions ''ApplyRuleRequest)
+$(deriveJSONAndTypeScript (enumOptions "Reminder") ''ReminderKindTag)
+$(deriveJSONAndTypeScript recordOptions ''ReminderView)
+$(deriveJSONAndTypeScript recordOptions ''DueDateView)
+$(deriveJSONAndTypeScript recordOptions ''RemindersResponse)
+$(deriveJSONAndTypeScript recordOptions ''AddDueDateRequest)
 $(deriveJSONAndTypeScript recordOptions ''BalanceRequest)
 $(deriveJSONAndTypeScript recordOptions ''ApiProblem)
 
@@ -464,6 +517,11 @@ typeScriptDeclarations =
     , getTypeScriptDeclarations (Proxy @CheckRuleRequest)
     , getTypeScriptDeclarations (Proxy @RuleCheck)
     , getTypeScriptDeclarations (Proxy @ApplyRuleRequest)
+    , getTypeScriptDeclarations (Proxy @ReminderKindTag)
+    , getTypeScriptDeclarations (Proxy @ReminderView)
+    , getTypeScriptDeclarations (Proxy @DueDateView)
+    , getTypeScriptDeclarations (Proxy @RemindersResponse)
+    , getTypeScriptDeclarations (Proxy @AddDueDateRequest)
     , getTypeScriptDeclarations (Proxy @BalanceRequest)
     , getTypeScriptDeclarations (Proxy @ApiProblem)
     ]

@@ -3,17 +3,16 @@
 **The handoff doc.** If you're picking this project up, read this first,
 then [CLAUDE.md](../CLAUDE.md). Updated in every PR.
 
-_Last updated: 2026-11-21, Phase 7 in progress (rule language done; scheduled jobs next)._
+_Last updated: 2026-11-21, end of Phase 7._
 
 ## Where we are
 
-**Phase 6 (the frontend) is complete.** The web UI does everything the command
-line does, and nothing in it has been used with real data or a real API key
-yet (see "Unverified" below). Phases 3 to 7 are stacked on one branch and in
+**Phase 7 (a rule language, scheduled jobs and reminders) is complete**, on top of Phase 6's web UI. Nothing
+in the UI or the checks has been used with real data or a real API key yet (see "Unverified" below). Phases 3 to 7 are stacked on one branch and in
 one PR, because the owner asked for work to continue without waiting for review
 ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4), one commit per
 phase, so they can be reviewed separately). Nothing has been merged by Claude.
-Phase 7 is in progress: the rule language is done, scheduled jobs are next.
+Phase 8 (the demo dataset and write-up) is next.
 
 | Phase | Status |
 |---|---|
@@ -24,12 +23,12 @@ Phase 7 is in progress: the rule language is done, scheduled jobs are next.
 | 4: Shared expenses and receivables | ✅ done, same PR (stacked on 3) |
 | 5: Screenshot ingestion with Claude | ✅ done, same PR (stacked on 4) |
 | 6: Frontend | ✅ done, same PR (stacked on 5) |
-| 7: Scheduled jobs and rules | 🚧 rule language done (this PR); scheduled jobs next |
-| 8: Demo and README | not started |
+| 7: Scheduled jobs and rules | ✅ done, same PR (stacked on 6) |
+| 8: Demo and README | ⏭ next |
 
 ## What works today
 
-**The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Seven pages:
+**The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Seven pages (the Review page also shows reminders):
 
 | Page | What it does |
 |---|---|
@@ -37,7 +36,7 @@ Phase 7 is in progress: the rule language is done, scheduled jobs are next.
 | Transactions | An account's entries with date and text filters; recategorize a row or split it with friends. Corrected entries show once. |
 | Spending | Spending per expense category, month by month, with bars. Transfers, friends' shares and refunds are not spending. |
 | Receivables | What each friend owes you; add a friend. |
-| Review | Rows the ledger wouldn't post on its own (settle them, or apply a possible repayment to the friend it names), screenshot rows waiting for a CSV (release one), importer warnings, add a rule. |
+| Review | **Reminders** from the daily checks (a month with no statement balance recorded, screenshot rows the bank hasn't confirmed after a week, a due date coming up: dismiss one, press *Check now*, manage due dates), rows the ledger wouldn't post on its own (settle them, or apply a possible repayment to the friend it names), screenshot rows waiting for a CSV (release one), importer warnings. |
 | Rules | Write categorization rules in a small language (`when description contains "UBER" and amount < -50.00 then categorize expense:transport`, or `... then split expense:food equally with alex, sam`). Read as you type: errors point at the line and column, and a preview shows which rows you've already imported it would move. Save, or save and move the posted rows. |
 | Import | Upload a bank CSV, or screenshots of the RBC app (needs `ANTHROPIC_API_KEY`). |
 
@@ -50,6 +49,13 @@ nothing drifts from it (D068). Saving never touches posted rows; `check-rule` / 
 rule would do to existing rows, and `apply-rule` / "Save and move N rows" moves them, through the same
 reverse-and-repost as `recategorize`, so no balance changes on any date (D069). Existing rules were converted
 by the migration.
+
+**Scheduled jobs and reminders (Phase 7):** the server runs the checks once a day from a job queue in
+Postgres (`FOR UPDATE SKIP LOCKED`, one pending job per kind, retries, a dead worker's job is taken back;
+D070). The checks are pure functions whose results are reconciled with stored reminders by (kind, subject),
+so a reminder resolves itself when its cause is fixed and running twice changes nothing (D071). Due dates
+(the Visa payment on the 15th) are configured on the Review page or with `add-due-date`. The server's
+clock is an input (D072).
 
 **The command line:** the full loop, from a bank export to a reconciled ledger. Step by step: [DEVELOPMENT.md](DEVELOPMENT.md#from-import-to-a-reconciled-ledger).
 
@@ -150,8 +156,8 @@ database; reversals; balances as of a date.
 **Skeleton (Phase 0):** `make dev`, `/api/health` with a live badge,
 TypeScript types generated from Haskell, the privacy guard, CI.
 
-Tests: 259 backend examples (hspec + hedgehog properties, including model-based and
-database properties; none call the real API) and 36 frontend tests (Vitest, with a fake
+Tests: 290 backend examples (hspec + hedgehog properties, including model-based and
+database properties; none call the real API) and 40 frontend tests (Vitest, with a fake
 `fetch`). `make check` passes.
 
 ## Decisions the owner should check (made while they were away)
@@ -234,12 +240,12 @@ Nothing else here has been run on a real RBC export yet either. When the owner d
   MASTERCARD, AMEX, AMERICAN EXPRESS or CREDIT CARD. Real descriptions may
   differ. `make post`'s summary shows what was recognized.
 
-## What's next: Phase 7, second half (scheduled jobs)
+## What's next: Phase 8 (demo and write-up)
 
-The rule language, split rules and the preview against past transactions are done (D067-D069). Left
-from [SPEC.md](SPEC.md#phase-7-scheduled-jobs-and-rules): a Postgres-backed job queue that runs
-recurring checks (statement periods with no checkpoint, provisional entries nobody confirmed after
-N days, upcoming due dates), with the results shown in the frontend.
+From [SPEC.md](SPEC.md#phase-8-demo-and-readme): a demo dataset (fake, in `fixtures/`) that shows
+the whole system working, and a README/write-up that explains the design to someone who has never
+seen it. Before that, the things only the owner can do: run it on **real** data and a real API key
+(see "Unverified"), and decide on a login before anything is deployed (D061).
 
 ## Open questions for the owner
 
@@ -272,6 +278,12 @@ N days, upcoming due dates), with the results shown in the frontend.
 - **A saved rule only affects rows posted later** (D044), by design: moving posted rows is the explicit
   `apply-rule` / "Save and move" step with a preview (D069). That step considers one rule at a time and
   ignores other rules' priorities, so a row a different rule put elsewhere is shown moving *from* there.
+- **The reminder thresholds are guesses** (D071): a month's statement is expected 5 days after it ends,
+  screenshot rows are stale after 7 days, due dates warn 5 days ahead by default. They are constants in
+  `Reckon.Checks`. There is no "snooze for a week" (dismiss hides it until it stops being true).
+- **One worker thread per server process.** Two servers on one database are safe (the queue is built for
+  it), but nothing starts the worker without the server: if it isn't running, `run-checks` / *Check now* is
+  the way.
 - **The rule language has no `or`, no regular expressions and no parentheses** (write two rules), and
   splits are equal shares only (D067).
 - **A typo in an account name on the command line creates a new account**, and accounts can't

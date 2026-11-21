@@ -263,7 +263,7 @@ splits in the form, authentication (D065).
 
 ### Phase 7: Scheduled jobs and rules
 
-**As built so far (rule language, DECISIONS D067-D069):** a one-line rule language (`when
+**As built (DECISIONS D067-D073).** Rule language (D067-D069): a one-line rule language (`when
 description contains "UBER" and amount < -50.00 then categorize expense:transport`, or `... then
 split expense:food equally with alex, sam`), parsed with megaparsec in `Reckon.Rules.Language`, evaluated
 in `Reckon.Rules.Eval`, stored as canonical text in `posting_rules` (replacing `categorization_rules`),

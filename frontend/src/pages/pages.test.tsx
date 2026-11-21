@@ -86,6 +86,8 @@ describe('the accounts page', () => {
   })
 })
 
+const noReminders = { reminders: [], dueDates: [], lastCheckedAt: null }
+
 describe('the review page', () => {
   const queue: ReviewQueue = {
     unposted: [
@@ -107,6 +109,7 @@ describe('the review page', () => {
   it('applies a possible repayment to the friend it names', async () => {
     const calls = fakeBackend({
       'GET /api/review': queue,
+      'GET /api/reminders': noReminders,
       'GET /api/ledger-accounts': [{ name: 'income:refunds', accountType: 'income' }],
       'POST /api/rows/41/settle': { message: 'Posted.', details: [] },
     })
@@ -288,5 +291,69 @@ describe('the rules page', () => {
     fireEvent.change(screen.getByLabelText(/Priority/), { target: { value: '1.5' } })
     expect(screen.getByText('Priority must be a whole number.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Save rule' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('reminders on the review page', () => {
+  const emptyQueue: ReviewQueue = { unposted: [], provisional: [], importFlags: [] }
+  const withReminders = {
+    reminders: [
+      { reminderId: 5, kind: 'statement_missing', message: 'No statement balance recorded for February 2026 on RBC Chequing ending 1234.', detectedAt: '2026-03-10T09:00:00Z' },
+      { reminderId: 6, kind: 'due_soon', message: 'Visa payment is due in 3 days (2026-03-15).', detectedAt: '2026-03-12T09:00:00Z' },
+    ],
+    dueDates: [{ dueDateId: 2, label: 'Visa payment', dayOfMonth: 15, warnDays: 5 }],
+    lastCheckedAt: '2026-03-12T09:00:00Z',
+  }
+
+  it('lists what the checks found, with its kind, and when they last ran', async () => {
+    fakeBackend({ 'GET /api/review': emptyQueue, 'GET /api/reminders': withReminders })
+    renderWithQueries(<ReviewPage />)
+    expect(await screen.findByText('No statement balance recorded for February 2026 on RBC Chequing ending 1234.')).toBeTruthy()
+    expect(screen.getByText('Statement')).toBeTruthy()
+    expect(screen.getByText('Due date')).toBeTruthy()
+    expect(screen.getByText('Visa payment is due in 3 days (2026-03-15).')).toBeTruthy()
+    expect(screen.getByText(/Last checked/)).toBeTruthy()
+  })
+
+  it('says so when nothing needs attention, and when the checks have never run', async () => {
+    fakeBackend({ 'GET /api/review': emptyQueue, 'GET /api/reminders': noReminders })
+    renderWithQueries(<ReviewPage />)
+    expect(await screen.findByText('Nothing needs your attention.')).toBeTruthy()
+    expect(screen.getByText('The checks have not run yet.')).toBeTruthy()
+  })
+
+  it('dismisses one reminder, and runs the checks on request', async () => {
+    const calls = fakeBackend({
+      'GET /api/review': emptyQueue,
+      'GET /api/reminders': withReminders,
+      'POST /api/reminders/5/dismiss': { message: 'Dismissed.', details: [] },
+      'POST /api/reminders/check': { message: '2 thing(s) need your attention:', details: ['A', 'B'] },
+    })
+    renderWithQueries(<ReviewPage />)
+    const item = (await screen.findByText('No statement balance recorded for February 2026 on RBC Chequing ending 1234.')).closest('li') as HTMLElement
+    fireEvent.click(within(item).getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/reminders/5/dismiss')).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(calls.some((call) => call.url === '/api/reminders/check')).toBe(true))
+  })
+
+  it('adds a due date as numbers, and refuses a day that is not a day', async () => {
+    const calls = fakeBackend({
+      'GET /api/review': emptyQueue,
+      'GET /api/reminders': noReminders,
+      'POST /api/due-dates': { message: 'Added Rent, on day 1 of every month.', details: [] },
+    })
+    renderWithQueries(<ReviewPage />)
+    const form = (await screen.findByRole('form', { name: 'Add a due date' })) as HTMLFormElement
+    fireEvent.change(within(form).getByLabelText('What'), { target: { value: ' Rent ' } })
+    fireEvent.change(within(form).getByLabelText('Day of the month'), { target: { value: '32' } })
+    fireEvent.submit(form)
+    expect(await within(form).findByRole('alert')).toBeTruthy()
+    expect(calls.some((call) => call.method === 'POST')).toBe(false)
+
+    fireEvent.change(within(form).getByLabelText('Day of the month'), { target: { value: '1' } })
+    fireEvent.submit(form)
+    expect(await screen.findByText('Added Rent, on day 1 of every month.')).toBeTruthy()
+    expect(calls.find((call) => call.method === 'POST')?.body).toEqual({ label: 'Rent', dayOfMonth: 1, warnDays: 5 })
   })
 })

@@ -972,3 +972,97 @@ silently applied:
 it's saved (a wrong rule would silently rewrite the past; reversible, but
 noisy); previewing against the full rule set (surprising: a rule's preview would
 change when an unrelated rule is added).
+
+### D070: A job queue in Postgres, run by a worker inside the server (Phase 7, accepted)
+
+**Context:** some things should happen on their own: noticing a month with no
+statement, screenshot rows nobody confirmed, a payment coming due. That needs
+something that runs without a person pressing a button, and that is visible and
+testable like the rest of the system.
+
+**Decision:** a `jobs` table and `Reckon.Jobs`. One kind of job exists,
+`run_checks`, which is recurring: finishing one queues the next, a day later.
+- **Claiming** is `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED)`:
+  two workers (two servers, or two threads) never take the same job, and the
+  second doesn't wait for the first. A test holds one worker's transaction open
+  and checks the second returns "nothing to do" immediately; removing `SKIP
+  LOCKED` fails that test.
+- **At most one pending job per kind** is a *database rule* (a partial unique
+  index over `queued` and `running`), not just a check in Haskell, so a
+  recurring job can't pile up however many servers start. `ensureRecurring` is
+  `INSERT ... ON CONFLICT DO NOTHING`.
+- **Failure** is recorded (`last_error`) and retried after a growing delay (5,
+  then 10 minutes), three attempts in all; after that the job is `failed` and
+  the next regular run is queued anyway, so a broken check never stops the
+  schedule.
+- **A dead worker** leaves a job `running`; after 15 minutes `requeueStuck`
+  puts it back.
+- **Time is an argument** to every queue function, so tests move the clock
+  instead of sleeping.
+- The worker is a `forkIO`'d loop in `reckon-server` (once a minute: ensure the
+  job is queued, run what is due). Its own errors are caught and printed; it
+  never takes the server down.
+
+**Alternatives considered:** cron or a systemd timer (outside the app: not
+visible in the UI, not testable, and one more thing to set up on a laptop);
+a plain `threadDelay (24h)` loop (nothing persists across restarts, two servers
+both run it); `pg_cron` (an extension to install); a queue library (a
+dependency for one job kind). The table is small enough that the SQL *is* the
+design, and it generalizes to more job kinds by widening a `CHECK`.
+
+### D071: Checks produce reminders; reminders are reconciled, not appended (Phase 7, accepted)
+
+**Decision:** a check is a pure function from a `Snapshot` of facts to the
+`Reminder`s that are true that day (`Reckon.Checks`); `Reckon.Reminders`
+gathers the snapshot and stores the result. Each reminder has a *kind* and a
+stable *subject* (an account's last 4 digits, or a due date and the day it falls
+on). `planReminders` compares what the checks now say with the open reminders by
+(kind, subject) and yields: open the new ones, refresh the message of ones
+still true (a due date's "in 4 days" becomes "in 3"), resolve the ones no longer
+true. A database rule allows one open reminder per (kind, subject). So running
+the checks twice changes nothing, and a reminder disappears by itself when its
+cause is fixed (record the statement, import the CSV, the due date passes).
+
+- **Dismissing** hides an open reminder without resolving it: it stays hidden
+  while it is still true, is never reopened, and is resolved normally once it
+  stops being true.
+- **The three checks (and their thresholds, which are guesses):** a calendar
+  month that ended more than 5 days ago, since an account's first transaction,
+  with no statement balance recorded in it; screenshot rows still unconfirmed 7
+  days after they were read; a due date inside its warning window (default 5
+  days). **One reminder per account** however many months are missing ("October,
+  September, August and 5 earlier"), so a long history is one line, not forty.
+- **Due dates** are a monthly day (`due_dates`: label, day 1-31, warn days 0-28);
+  a month too short for the day uses its last day (`nextDueDate`, with a property
+  test). Configured in the UI or `add-due-date`.
+- Hand-run checks ("Check now", `run-checks`) are recorded as succeeded jobs so
+  "last checked" tells the truth.
+
+**Alternatives considered:** appending a new reminder row on every run (a daily
+pile of duplicates); storing nothing and recomputing on every page load (no
+history, no dismissing, and the Review page would run the checks on each view);
+a reminder per missing month.
+
+### D072: Time is an input (Phase 7, accepted)
+
+**Decision:** `AppEnv` carries `currentTime :: IO UTCTime` (`getCurrentTime` in
+the server). Handlers that depend on "today" (balances as of today, which months
+have ended, the checks) read it from there; the queue and the checks take the
+time as an argument. Tests set it (`env {currentTime = pure ...}`) instead of
+depending on the day they run, which matters because every test scenario lives in
+a made-up future year (D047). The earlier `asOf` query parameter stays for balances.
+
+### D073: `make check` builds with `-Werror` in its own directory (tooling, accepted)
+
+**Context:** while finishing the rule language, a clean CI build would have
+rejected name-shadowing warnings in a test file that `make check` accepted.
+GHC doesn't recompile a module when only warning flags change, so a module
+compiled earlier (by `make test`, without `-Werror`) kept its warnings hidden.
+
+**Decision:** `scripts/check.sh` builds and tests in `backend/dist-newstyle-werror`
+(gitignored), which only ever holds objects compiled with `-Werror`, the way CI's
+clean build does. The first `make check` after this compiles the project twice
+(once per directory); after that it's incremental in both.
+
+**Alternative:** `-fforce-recomp` on every check (always correct, always minutes
+slower).

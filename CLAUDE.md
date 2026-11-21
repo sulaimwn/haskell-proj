@@ -79,7 +79,10 @@ misled about the current state?* If yes, fix the docs.
   Database tests use `TEST_DATABASE_URL` and fail, not skip, without it.
   Tests never call the real Claude API.
 - **Warnings:** the cabal file enables a strict warning set. CI builds with
-  `-Werror`.
+  `-Werror`. GHC doesn't recompile a module when only warning flags change, so `make check` builds in
+  its own directory (`backend/dist-newstyle-werror`) that only ever holds `-Werror` objects. A plain
+  `cabal build --ghc-options=-Werror` in `dist-newstyle` can pass on cached objects and hide warnings
+  that CI's clean build will reject.
 
 ## Privacy rules (non-negotiable)
 
@@ -106,7 +109,7 @@ make reconcile  # compare the ledger with every recorded statement balance
 make owed       # what friends owe you
 make provisional  # rows read from screenshots that no bank CSV has confirmed yet
 cd frontend && npm test   # frontend tests (also part of make check)
-scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, rules, check-rule, apply-rule, delete-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
+scripts/reckon.sh COMMAND ...   # any reckon-cli command (run-checks, reminders, add-due-date, post-row, recategorize, add-rule, rules, check-rule, apply-rule, delete-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
 ```
 
 Toolchain: GHC 9.10.3, cabal 3.16.1.0 (via ghcup), Node 22, Docker. See
@@ -175,6 +178,13 @@ docs/        see the table above
 - `Classify.Rule` is the planner's *resolved* rule (account ids, `Outcome`); `Rules.Language.Rule` is
   what the text says (account names). `Rules.loadRules` turns one into the other. Tests of the pure
   planner build `Classify.Rule` directly (`containsRule` for the simple case).
+- The job queue is a global singleton (one pending `run_checks` job in the whole database, by a unique
+  index), so a queue test starts with `clearQueue` (JobsSpec) and passes its own clock. The test
+  environment's connection pool has **one** connection: a test that needs two workers builds its own pool
+  (`createDatabasePool url 2`), and runs the second worker on a thread so a missing lock fails the test
+  instead of hanging it.
+- Anything that depends on "today" reads `env.currentTime` (D072), because every scenario lives in a
+  made-up future year. Tests that need a date set it: `env {currentTime = pure (UTCTime day 0)}`.
 - Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
   and IO in their callers. Pure planners are generic in their id and
   account types so tests can use `Int` and `Text`.

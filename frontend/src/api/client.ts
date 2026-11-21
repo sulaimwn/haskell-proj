@@ -6,6 +6,7 @@
 import type {
   AccountSummary,
   ActionResult,
+  AddDueDateRequest,
   AddPersonRequest,
   AddRuleRequest,
   ApiProblem,
@@ -17,6 +18,7 @@ import type {
   ImportScreenshotsRequest,
   LedgerAccountView,
   ReceivablesResponse,
+  RemindersResponse,
   ReviewQueue,
   RuleCheck,
   RuleView,
@@ -118,6 +120,7 @@ export const api = {
   getReview: () => getJson<ReviewQueue>('/api/review'),
   getLedgerAccounts: () => getJson<LedgerAccountView[]>('/api/ledger-accounts'),
   getRules: () => getJson<RuleView[]>('/api/rules'),
+  getReminders: () => getJson<RemindersResponse>('/api/reminders'),
 
   importCsv: (request: ImportCsvRequest) => postJson<ActionResult>('/api/imports/csv', request),
   importScreenshots: (request: ImportScreenshotsRequest) => postJson<ActionResult>('/api/imports/screenshots', request),
@@ -127,6 +130,12 @@ export const api = {
   recategorizeRow: (rowId: number, request: SettleRequest) => postJson<ActionResult>(`/api/rows/${rowId}/recategorize`, request),
   splitRow: (rowId: number, request: SplitRequest) => postJson<ActionResult>(`/api/rows/${rowId}/split`, request),
   releaseProvisional: (screenshotRowId: number) => postJson<ActionResult>(`/api/provisional/${screenshotRowId}/release`, {}),
+
+  /** Runs the recurring checks now instead of waiting for the daily run. */
+  checkReminders: () => postJson<ActionResult>('/api/reminders/check', {}),
+  dismissReminder: (reminderId: number) => postJson<ActionResult>(`/api/reminders/${reminderId}/dismiss`, {}),
+  addDueDate: (request: AddDueDateRequest) => postJson<ActionResult>('/api/due-dates', request),
+  deleteDueDate: (dueDateId: number) => postJson<ActionResult>(`/api/due-dates/${dueDateId}/delete`, {}),
 
   addPerson: (request: AddPersonRequest) => postJson<ActionResult>('/api/people', request),
   addRule: (request: AddRuleRequest) => postJson<ActionResult>('/api/rules', request),

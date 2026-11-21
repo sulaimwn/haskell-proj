@@ -26,6 +26,7 @@ This grows with every phase. Every new module gets a section.
 - [Shared expenses (Phase 4)](#shared-expenses-phase-4)
 - [Reading screenshots with Claude (Phase 5)](#reading-screenshots-with-claude-phase-5)
 - [The rule language (Phase 7)](#the-rule-language-phase-7)
+- [Scheduled jobs and reminders (Phase 7)](#scheduled-jobs-and-reminders-phase-7)
 - [The HTTP API and the screens (Phase 6)](#the-http-api-and-the-screens-phase-6)
 - [The frontend (Phase 6)](#the-frontend-phase-6)
 - [Tests](#tests)
@@ -41,7 +42,7 @@ This grows with every phase. Every new module gets a section.
 |---|---|---|
 | `library` | `src/` | All the real code. Everything below lives here. |
 | `executable reckon-server` | `app/` | A few lines: load config, build the pool, start the HTTP server. |
-| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4); `import-screenshots`, `provisional`, `release-provisional`, `eval-screenshots` (Phase 5); `rules`, `check-rule`, `apply-rule`, `delete-rule` and the rule-language form of `add-rule` (Phase 7). |
+| `executable reckon-cli` | `cli/` | Command-line tools: `import-rbc-csv` (Phase 2), `post`, `post-row`, `add-rule`, `opening-balance`, `checkpoint`, `reconcile` (Phase 3); `add-person`, `split-row`, `recategorize`, `owed`, `spending` (Phase 4); `import-screenshots`, `provisional`, `release-provisional`, `eval-screenshots` (Phase 5); `rules`, `check-rule`, `apply-rule`, `delete-rule` and the rule-language form of `add-rule`, `run-checks`, `reminders`, `add-due-date`, `due-dates`, `delete-due-date` (Phase 7). |
 | `executable reckon-codegen` | `codegen/` | Writes the TypeScript types for the frontend. |
 | `test-suite reckon-test` | `test/` | hspec tests against the library. |
 
@@ -1102,6 +1103,93 @@ to `/api/rules/check` with `useQuery`; `placeholderData: keepPreviousData` keeps
 instead of flashing. While the text differs from the settled text the answer is described as stale and Save
 is off, so nothing can be saved on the strength of an answer about older text. A problem is shown as
 `Line 1, column 15: ...` with the offending line and a caret (`pointAt`, a pure tested function).
+
+---
+
+## Scheduled jobs and reminders (Phase 7)
+
+Design: D070-D073. Things the ledger can notice for itself, run on a schedule, with the results kept and
+dismissible.
+
+### `Reckon.Checks`: a check is a function
+
+```haskell
+runChecks :: Snapshot -> [Reminder]
+```
+
+All pure. `Snapshot` is a plain record of facts (today, each account's first transaction and statement
+dates, open screenshot rows, due dates), so every check is tested with literals and `Day`s, no database and
+no clock. The only calendar arithmetic is in `nextDueDate`, using `Data.Time.Calendar`
+(`gregorianMonthLength`, `fromGregorian`); a month too short for the day clamps with `min`, and a property
+test checks the result is never in the past, never more than 31 days ahead, and always on the right day.
+
+- `missingStatementMonths` builds the infinite list `iterate nextMonth firstMonth` and cuts it with
+  `takeWhile isDue`, which is safe because months are in order: the first month that hasn't ended ends the
+  list. (Laziness doing what a `while` loop would.)
+- `planReminders reported open` is the heart: `Map.notMember` / `Map.lookup` over `(kind, subject)` keys
+  yields three lists (open, refresh, resolve). Two properties pin it down: when stored equals reported there
+  is nothing to do, and every reminder is accounted for exactly once.
+
+**Q: Why return reminders from a pure function and reconcile them with the database separately?**
+A: Because "what is true today" and "what is stored" are different questions. Keeping the first pure makes
+every rule testable in microseconds and by property; the second is a small, mechanical diff
+(`planReminders`, also pure) applied by a thin DB function. The database only ever sees the three lists.
+
+### `Reckon.Jobs`: a queue is a table and one query
+
+`claimJob` is the whole trick:
+
+```sql
+UPDATE jobs SET status = 'running', locked_at = ?, attempts = attempts + 1
+WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= ?
+            ORDER BY run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING id, kind, attempts
+```
+
+`FOR UPDATE` locks the row it picks, and `SKIP LOCKED` makes a second worker pass over a locked row instead
+of waiting, so claiming is both exclusive and non-blocking. It's one statement, so there is no
+read-then-write race. The Haskell around it is small functions in `SqlPersistT`: `ensureRecurring`
+(`INSERT ... ON CONFLICT DO NOTHING` against the partial unique index), `completeJob`, `failJob` (a `case`
+on `attempts < maxAttempts`), `requeueStuck`.
+
+`runDueJobsWith handler pool now` runs each job in *separate* transactions: claim (commit, so the job reads as
+`running` to everyone), run the handler inside `try`, then record the outcome. A handler that throws is
+caught as a `SomeException` and becomes a `JobFailed`, so one bad job never stops the loop. The handler is a
+parameter so a test can make one throw. `workerLoop` is `forever` over a `try`, with `threadDelay` between
+passes, started with `forkIO` in `app/Main.hs`.
+
+**Q: How do you test concurrency?**
+A: One test gives two workers their own two-connection pool. The first claims inside a transaction it keeps
+open (an `MVar` makes it wait), so its row lock is held; the second runs on another thread and must answer
+"nothing to do" within five seconds. If the claim waited for the lock, the answer would never arrive and the
+test fails. A mutation check (deleting `SKIP LOCKED`) confirms it does. Running the second worker on its own
+thread matters: the first version blocked the test thread and hung instead of failing.
+
+**Q: Why a database queue and not cron?**
+A: A queue in the database is visible (a table you can read), testable (move the clock), recoverable (a
+crashed worker's job comes back), and needs nothing installed. Cron is outside the application, so none of
+those hold.
+
+**Q: What stops the recurring job piling up?**
+A: A partial unique index, `ON jobs (kind) WHERE status IN ('queued','running')`. Whatever the Haskell does,
+the database refuses a second pending job. That's the repo's rule: integrity lives in the database, and a
+raw-SQL test proves it.
+
+### `Reckon.Reminders` and the clock
+
+`loadSnapshot` runs three `rawSql` queries (accounts with `min(transaction_date)` and a `json_agg` of
+statement dates; open screenshot rows with the day they were read; due dates through persistent). `checkNow`
+loads the snapshot, runs the checks, loads the open reminders, calls `planReminders`, and applies the plan
+with `insert` / `update`. Time never comes from `getCurrentTime` inside these: it is an argument, and the
+server's handlers get it from `AppEnv.currentTime` (D072), which is how a test that lives in the year 3000
+checks "which months have ended".
+
+### The Reminders panel (frontend)
+
+`RemindersPanel` (on the Review page) reads `GET /api/reminders` and shows each open reminder with a kind
+label (`kindLabel`, an exhaustive `switch` with `satisfies never` over the generated `ReminderKindTag`), a
+Dismiss button, "Check now", and a `<details>` for due dates with an add form that validates the day and
+warning window before sending. Every action goes through `useAction`, which refetches everything.
 
 ---
 

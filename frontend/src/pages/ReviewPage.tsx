@@ -6,6 +6,7 @@ import { LedgerAccountSelect } from '../components/LedgerAccountSelect'
 import { Money } from '../components/Money'
 import { Notice } from '../components/Notice'
 import { QueryState } from '../components/QueryState'
+import { RemindersPanel } from '../components/RemindersPanel'
 import { Section } from '../components/Section'
 import { hrefFor } from '../lib/route'
 import { useAction } from '../lib/useAction'
@@ -16,6 +17,9 @@ export function ReviewPage() {
     <QueryState query={queue}>
       {(data) => (
         <>
+          <Section title="Reminders" hint="Things the ledger noticed that you might forget: a month with no statement, screenshot rows the bank hasn't confirmed, a payment coming due.">
+            <RemindersPanel />
+          </Section>
           <Section title="Needs a decision" hint="Rows the ledger would not post on its own, because it can't tell where they belong.">
             {data.unposted.length === 0 ? <p className="muted">Nothing to decide.</p> : data.unposted.map((row) => <UnpostedRow key={row.rowId} row={row} />)}
           </Section>

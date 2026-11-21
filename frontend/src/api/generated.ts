@@ -267,6 +267,42 @@ export interface IApplyRuleRequest {
   ruleText: string;
 }
 
+export type ReminderKindTag = "statement_missing" | "provisional_stale" | "due_soon";
+
+export type ReminderView = IReminderView;
+
+export interface IReminderView {
+  reminderId: number;
+  kind: ReminderKindTag;
+  message: string;
+  detectedAt: string;
+}
+
+export type DueDateView = IDueDateView;
+
+export interface IDueDateView {
+  dueDateId: number;
+  label: string;
+  dayOfMonth: number;
+  warnDays: number;
+}
+
+export type RemindersResponse = IRemindersResponse;
+
+export interface IRemindersResponse {
+  reminders: ReminderView[];
+  dueDates: DueDateView[];
+  lastCheckedAt: string | null;
+}
+
+export type AddDueDateRequest = IAddDueDateRequest;
+
+export interface IAddDueDateRequest {
+  label: string;
+  dayOfMonth: number;
+  warnDays: number | null;
+}
+
 export type BalanceRequest = IBalanceRequest;
 
 export interface IBalanceRequest {

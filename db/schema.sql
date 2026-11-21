@@ -188,6 +188,36 @@ ALTER TABLE public.bank_accounts ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
+-- Name: due_dates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.due_dates (
+    id bigint NOT NULL,
+    label text NOT NULL,
+    day_of_month integer NOT NULL,
+    warn_days integer DEFAULT 5 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT due_dates_day_of_month_check CHECK (((day_of_month >= 1) AND (day_of_month <= 31))),
+    CONSTRAINT due_dates_label_check CHECK ((btrim(label) <> ''::text)),
+    CONSTRAINT due_dates_warn_days_check CHECK (((warn_days >= 0) AND (warn_days <= 28)))
+);
+
+
+--
+-- Name: due_dates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.due_dates ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.due_dates_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: import_batch_coverage; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -257,6 +287,41 @@ CREATE TABLE public.import_review_items (
 
 ALTER TABLE public.import_review_items ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.import_review_items_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.jobs (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    run_at timestamp with time zone NOT NULL,
+    status text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    locked_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT jobs_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT jobs_check CHECK (((status = 'running'::text) = (locked_at IS NOT NULL))),
+    CONSTRAINT jobs_kind_check CHECK ((kind = 'run_checks'::text)),
+    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: jobs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.jobs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.jobs_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -478,6 +543,38 @@ ALTER TABLE public.raw_bank_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
+-- Name: reminders; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reminders (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    subject text NOT NULL,
+    message text NOT NULL,
+    detected_at timestamp with time zone NOT NULL,
+    resolved_at timestamp with time zone,
+    dismissed_at timestamp with time zone,
+    CONSTRAINT reminders_kind_check CHECK ((kind = ANY (ARRAY['statement_missing'::text, 'provisional_stale'::text, 'due_soon'::text]))),
+    CONSTRAINT reminders_message_check CHECK ((message <> ''::text)),
+    CONSTRAINT reminders_subject_check CHECK ((subject <> ''::text))
+);
+
+
+--
+-- Name: reminders_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.reminders ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.reminders_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -620,6 +717,14 @@ ALTER TABLE ONLY public.bank_accounts
 
 
 --
+-- Name: due_dates due_dates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.due_dates
+    ADD CONSTRAINT due_dates_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: import_batch_coverage import_batch_coverage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -649,6 +754,14 @@ ALTER TABLE ONLY public.import_batches
 
 ALTER TABLE ONLY public.import_review_items
     ADD CONSTRAINT import_review_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: jobs jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.jobs
+    ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
 
 
 --
@@ -796,6 +909,14 @@ ALTER TABLE ONLY public.raw_bank_rows
 
 
 --
+-- Name: reminders reminders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reminders
+    ADD CONSTRAINT reminders_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -860,6 +981,20 @@ ALTER TABLE ONLY public.statement_checkpoints
 
 
 --
+-- Name: jobs_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX jobs_due_idx ON public.jobs USING btree (run_at) WHERE (status = 'queued'::text);
+
+
+--
+-- Name: jobs_one_pending_per_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX jobs_one_pending_per_kind ON public.jobs USING btree (kind) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text]));
+
+
+--
 -- Name: journal_entries_occurred_on_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -899,6 +1034,13 @@ CREATE INDEX opening_balances_bank_account_id_idx ON public.opening_balances USI
 --
 
 CREATE INDEX raw_bank_rows_first_seen_batch_id_idx ON public.raw_bank_rows USING btree (first_seen_batch_id);
+
+
+--
+-- Name: reminders_one_open_per_subject; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX reminders_one_open_per_subject ON public.reminders USING btree (kind, subject) WHERE (resolved_at IS NULL);
 
 
 --
@@ -1273,4 +1415,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260924090000'),
     ('20260925090000'),
     ('20260926090000'),
-    ('20260927090000');
+    ('20260927090000'),
+    ('20260928090000');

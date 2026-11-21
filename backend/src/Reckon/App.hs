@@ -7,6 +7,7 @@ module Reckon.App
   ) where
 
 import Control.Monad.Reader (ReaderT, runReaderT)
+import Data.Time (UTCTime)
 import Database.Persist.Postgresql (ConnectionPool)
 import Reckon.Anthropic (ScreenshotReading)
 import Reckon.Config (Config)
@@ -19,6 +20,10 @@ data AppEnv = AppEnv
   , screenshotReading :: ScreenshotReading
   -- ^ How screenshots are read. Set once at startup: it holds the model and
   -- a function to call it with, and never the API key in any printable form.
+  , currentTime :: IO UTCTime
+  -- ^ The clock. @getCurrentTime@ in the server; a test can set it, so what
+  -- depends on "today" (balances as of today, which months have ended) doesn't
+  -- depend on the day the tests run.
   }
 
 -- | The monad handlers run in: they can read 'AppEnv' (@ReaderT@), and can

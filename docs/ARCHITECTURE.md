@@ -64,6 +64,9 @@ backend/
     Rules/Eval.hs         pure: does a rule hold for a row (description, amount, kind of account)?
     Rules.hs              DB: save, check, delete rules (stored as canonical text); resolve them into the planner's Rule type
     Rules/History.hs      DB + pure: preview a rule against rows already imported, and apply it to the posted ones
+    Checks.hs             pure: the recurring checks (missing statements, unconfirmed screenshots, due dates) and planReminders
+    Reminders.hs          DB: gather the checks' snapshot, keep stored reminders in step, dismiss, due dates
+    Jobs.hs               DB + IO: the Postgres job queue (SKIP LOCKED claim, retries, stuck recovery) and the worker loop
     Anthropic.hs          the Claude Messages API client (raw HTTP): request builder, response parser, retries, redacted key
     Screenshot/Extraction.hs  pure: the schema and prompt sent to the model; strict validation of its reply; dates, years and amounts
     Screenshot/Align.hs   pure: joining overlapping screenshots of one scroll
@@ -113,6 +116,9 @@ into TypeScript.
 | `GET /api/rules`, `POST /api/rules`, `/api/rules/:id/delete` | list, save and delete rules (saving validates first: 422 with the line and column) | `Rules` |
 | `POST /api/rules/check` | reads a rule and previews it against existing rows, **without saving**. A bad rule is a normal 200 answer with `problem {line, column, message}`, because the page calls it as you type | `Rules.checkRule`, `Rules.History.previewRule` |
 | `POST /api/rules/apply` | moves the posted rows the rule would move | `Rules.History.applyRule` |
+| `GET /api/reminders` | what the recurring checks found (open, not dismissed), the configured due dates, and when the checks last ran | `Reminders` |
+| `POST /api/reminders/check`, `/api/reminders/:id/dismiss` | run the checks now; hide one reminder | `Reminders.checkNow`, `dismissReminder` |
+| `POST /api/due-dates`, `/api/due-dates/:id/delete` | add (422 on a bad day or label) or remove a monthly due date | `Reminders` |
 
 Reads are plain queries. Actions return `{message, details}`, the same
 sentences the CLI prints (`Reckon.Messages`). A refusal is `{problem}`
@@ -343,6 +349,7 @@ reports RECONCILED. `PostingSpec` runs exactly this.
 | Table | Holds | Mutable? |
 |---|---|---|
 | `journal_entry_evidence` | which raw bank row each posted entry came from (PK: entry, row) | append-only |
+| `jobs`, `reminders`, `due_dates` | the job queue (one pending job per kind, by a partial unique index); what the checks found (one open per kind and subject; dismissible); monthly due dates (Phase 7, D070-D071) | operational state: updated in place |
 | `posting_rules` | one rule per row as text in the rule language, in canonical form (UNIQUE), with priority. Replaced `categorization_rules` in Phase 7 (D068) | editable and deletable (configuration) |
 | `statement_checkpoints` | a statement's closing balance for an account and date (UNIQUE per account and date), as the statement shows it | append-only |
 | `opening_balances` | which journal entry is an account's opening balance, and its date | append-only; replaced by reversing the entry |
@@ -491,6 +498,34 @@ when description contains "DINNER" and account is credit card then split expense
   so no balance changes on any date (D069). It is a separate, explicit step: saving a rule never
   rewrites the past.
 
+## Scheduled jobs and reminders (Phase 7)
+
+Some things a ledger can notice for itself (D070, D071):
+
+```
+ reckon-server ─ forkIO ─► workerLoop (once a minute)
+                            │ ensureRecurring (one pending run_checks job, by a unique index)
+                            │ runDueJobs: claim (FOR UPDATE SKIP LOCKED) ─► checkNow ─► complete / fail+retry
+                            ▼
+   loadSnapshot ─► runChecks (pure) ─► planReminders (open / refresh / resolve, by kind+subject) ─► reminders
+        │                                                                                              │
+   accounts, statement dates,                                                       GET /api/reminders ─► Review page
+   open screenshot rows, due dates                                  (also: "Check now", scripts/reckon.sh run-checks)
+```
+
+- **Checks are pure** (`Reckon.Checks`): a month ended more than 5 days ago with no statement balance
+  recorded in it; screenshot rows unconfirmed 7 days after they were read; a due date inside its warning
+  window. A check returns `Reminder {kind, subject, message}`; `subject` is stable across runs.
+- **Reminders are reconciled, not appended.** `planReminders` compares the checks' output with the open
+  rows by (kind, subject): new ones open, ones still true get their message refreshed, ones no longer true
+  resolve. A unique index allows one open reminder per (kind, subject). Dismissing hides one without
+  resolving it.
+- **The queue** is the `jobs` table. `claimJob` is a single `UPDATE ... WHERE id = (SELECT ... FOR UPDATE
+  SKIP LOCKED)`; a partial unique index allows one `queued` or `running` job per kind; failures retry after
+  5 and 10 minutes, then give up until the next regular run; a job held for 15 minutes is taken back.
+  Every function takes the time as an argument.
+- **Time is an input** (D072): `AppEnv.currentTime`. Tests set the clock.
+
 ## Invariants
 
 This section grows every phase. Each invariant lists how it is enforced.
@@ -535,6 +570,9 @@ This section grows every phase. Each invariant lists how it is enforced.
 | A rule that stops parsing never stops posting | `loadRules` skips it; test with a broken row inserted by raw SQL | Phase 7 |
 | A rule never rewrites the past unless asked, and applying it changes no balance on any date | `previewRule` is read-only; `applyRule` reuses `repostRow` (reversal dated like the original); test compares the account's balance on every day before and after; mutation check | Phase 7 |
 | A rule's split parts add up to the payment exactly | `equalSplit` → `BalancedLines` + deferred trigger; property over amounts | Phase 7 |
+| A job is run by one worker at a time, and a recurring job never piles up | `FOR UPDATE SKIP LOCKED` (a test holds one worker's transaction open and checks the second skips; removing `SKIP LOCKED` fails it); partial unique index `jobs_one_pending_per_kind` (raw-SQL test) | Phase 7 |
+| A failing or crashed job is retried, never lost, and never stops the schedule | `failJob` (growing delay, 3 attempts, then the next regular run), `requeueStuck`; tests move the clock | Phase 7 |
+| Running the checks twice changes nothing, and a reminder disappears when its cause does | `planReminders` (properties: nothing to do when stored matches reported; every reminder accounted for once) + unique index on open (kind, subject); DB tests record the statement and watch it resolve | Phase 7 |
 | Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI
@@ -545,7 +583,7 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Job | Steps |
 |---|---|
 | Privacy guard and shell scripts | `check-private-data.sh --all`, shellcheck |
-| Backend | cabal build with `-Werror` (dependency store cached by freeze-file hash), migrate a Postgres 17 service container, `cabal test`, `codegen.sh --check` |
+| Backend | cabal build with `-Werror` (dependency store cached by freeze-file hash), migrate a Postgres 17 service container, `cabal test`, `codegen.sh --check`. `make check` does the same in `backend/dist-newstyle-werror` so a cached non-`-Werror` build can't hide warnings (D073) |
 | Frontend | `npm ci`, oxlint, `tsc -b` (strict), `vitest run`, `vite build` |
 
 ## Environments

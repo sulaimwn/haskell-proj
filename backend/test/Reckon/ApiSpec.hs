@@ -10,6 +10,7 @@ import Data.List (find, sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import Data.Time (UTCTime (..))
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types (Header, Method, Status, status200, status400, status403, status404, status415, status422, status502, status503)
 import Network.Wai (Application, Request (..), defaultRequest, responseLBS)
@@ -349,6 +350,48 @@ spec = beforeAll makeTestEnv $ do
       applying <- postResponse env "/api/rules/apply" ApplyRuleRequest {ruleText = "nonsense"} >>= refusedWith status422
       applying `shouldSatisfy` Text.isInfixOf "That isn't a rule"
       postResponse env "/api/rules/0/delete" emptyBody >>= void' (refusedWith status404)
+
+  describe "reminders over HTTP" $ do
+    it "runs the checks on request, lists what they found, dismisses one, and manages due dates" $ \realEnv -> do
+      scenario <- newScenario realEnv
+      -- The scenario lives in a future year, so the server's clock is set to
+      -- the March after its February rows.
+      let env = realEnv {currentTime = pure (UTCTime (on scenario 3 10) 0)}
+      importCsv env scenario (inlineCsv [("2/3/2026", "SHOP EXAMPLE", "-8.00")])
+
+      -- A due date within its window of today, whatever today is.
+      added <- postResponse env "/api/due-dates" AddDueDateRequest {label = "Visa " <> scenario.tag, dayOfMonth = 15, warnDays = Just 28} >>= succeeded @ActionResult
+      added.message `shouldSatisfy` Text.isInfixOf "day 15 of every month"
+
+      ran <- postResponse env "/api/reminders/check" emptyBody >>= succeeded @ActionResult
+      ran.message `shouldSatisfy` Text.isInfixOf "need your attention"
+
+      response <- getResponse env "/api/reminders" >>= succeeded @RemindersResponse
+      response.lastCheckedAt `shouldSatisfy` (/= Nothing)
+      let statements = [reminder | reminder <- response.reminders, reminder.kind == ReminderStatementMissing, ("ending " <> scenario.chequingLast4) `Text.isInfixOf` reminder.message]
+          dueDates = [due | due <- response.dueDates, due.label == "Visa " <> scenario.tag]
+      length statements `shouldBe` 1
+      map (\due -> (due.dayOfMonth, due.warnDays)) dueDates `shouldBe` [(15, 28)]
+      [reminder | reminder <- response.reminders, ("Visa " <> scenario.tag) `Text.isInfixOf` reminder.message, reminder.kind == ReminderDueSoon] `shouldSatisfy` ((== 1) . length)
+
+      -- Dismissing hides it from the list.
+      forM_ statements $ \reminder ->
+        postResponse env (ByteString.concat ["/api/reminders/", Text.encodeUtf8 (Text.pack (show reminder.reminderId)), "/dismiss"]) emptyBody >>= void' (succeeded @ActionResult)
+      afterDismiss <- getResponse env "/api/reminders" >>= succeeded @RemindersResponse
+      [reminder | reminder <- afterDismiss.reminders, ("ending " <> scenario.chequingLast4) `Text.isInfixOf` reminder.message] `shouldBe` []
+
+      forM_ dueDates $ \due ->
+        postResponse env (ByteString.concat ["/api/due-dates/", Text.encodeUtf8 (Text.pack (show due.dueDateId)), "/delete"]) emptyBody >>= void' (succeeded @ActionResult)
+      afterDelete <- getResponse env "/api/reminders" >>= succeeded @RemindersResponse
+      [due | due <- afterDelete.dueDates, due.label == "Visa " <> scenario.tag] `shouldBe` []
+
+    it "422s a bad due date and 404s dismissing or deleting what isn't there" $ \env -> do
+      day <- postResponse env "/api/due-dates" AddDueDateRequest {label = "Rent", dayOfMonth = 32, warnDays = Nothing} >>= refusedWith status422
+      day `shouldSatisfy` Text.isInfixOf "1 to 31"
+      blank <- postResponse env "/api/due-dates" AddDueDateRequest {label = " ", dayOfMonth = 1, warnDays = Nothing} >>= refusedWith status422
+      blank `shouldSatisfy` Text.isInfixOf "needs a label"
+      postResponse env "/api/reminders/0/dismiss" emptyBody >>= void' (refusedWith status404)
+      postResponse env "/api/due-dates/0/delete" emptyBody >>= void' (refusedWith status404)
   where
     sortedDates transactions = sort (map (.date) transactions)
     transactionsOf env scenario = getResponse env (ByteString.concat ["/api/accounts/", Text.encodeUtf8 scenario.chequingLast4, "/transactions"]) >>= succeeded @[TransactionView]

@@ -22,8 +22,10 @@ import Reckon.Database.Schema (BankAccount)
 import Reckon.Import (importRbcCsv, renderImportError, renderImportOutcome)
 import Reckon.Import.RbcCsv (parseCents)
 import Reckon.Money (Cents, renderCents)
-import Reckon.Messages (describeCheckpointError, describeOpeningBalanceError, describePersonError, describePostingError, describeReleaseError, describeRuleError, describeSplitRowError)
+import Reckon.Messages (describeDueDateError, describeCheckpointError, describeOpeningBalanceError, describePersonError, describePostingError, describeReleaseError, describeRuleError, describeSplitRowError)
 import Reckon.People (addPerson, renderOwed, whoOwesWhat)
+import Reckon.Reminders (ReminderItem (..), addDueDate, checkNow, deleteDueDate, loadDueDates, openReminders, recordManualRun, renderCheckSummary)
+import Reckon.Checks (DueDateFacts (..))
 import Reckon.Posting (postPendingRows, postRowManually, recategorizeRow, renderPostingSummary)
 import Reckon.Rules (StoredRule (..), addContainsRule, addRule, checkRule, deleteRule, loadStoredRules)
 import Reckon.Rules.History (applyRule, loadHistory, previewRule, renderPreview, ApplyOutcome (..))
@@ -58,6 +60,11 @@ usage =
     , "  add-person NAME MATCH_TEXT             someone you share costs with, e.g. add-person alex \"ALEX SMITH\""
     , "  split-row ROW_ID ACCOUNT equal NAME... split a payment equally between you and these people"
     , "  split-row ROW_ID ACCOUNT NAME=AMOUNT.. split with exact shares; you keep the rest"
+    , "  run-checks                             run the recurring checks now (the server also runs them daily)"
+    , "  reminders                              what the checks found that still needs you"
+    , "  add-due-date LABEL DAY [WARN_DAYS]     remind me of something due on this day of every month, e.g. \"Visa payment\" 15"
+    , "  due-dates                              list the due dates"
+    , "  delete-due-date DUE_DATE_ID            remove one"
     , "  owed                                   what each person currently owes you"
     , "  spending FROM TO                       what you spent per category (your share only)"
     , "  import-screenshots LAST4 [--taken DATE] FILE...   read screenshots of the app (one scroll, top first)"
@@ -136,6 +143,31 @@ main = do
       anthropic <- loadAnthropicConfig >>= either (die . Text.unpack) pure
       extract <- anthropicExtractor anthropic
       evaluateScreenshots extract directory >>= Text.putStr
+    ["run-checks"] -> withDatabase $ \pool -> do
+      now <- getCurrentTime
+      summary <- runSqlPool (checkNow now <* recordManualRun now) pool
+      Text.putStr (renderCheckSummary summary)
+    ["reminders"] -> withDatabase $ \pool -> do
+      open <- runSqlPool openReminders pool
+      Text.putStr $
+        if null open
+          then "No open reminders. (They are refreshed daily by the server, or by: scripts/reckon.sh run-checks)\n"
+          else Text.unlines [ "  #" <> showText item.reminderId <> "  " <> item.message | item <- open ]
+    ["due-dates"] -> withDatabase $ \pool -> do
+      due <- runSqlPool loadDueDates pool
+      Text.putStr $
+        if null due
+          then "No due dates. Add one: scripts/reckon.sh add-due-date \"Visa payment\" 15\n"
+          else Text.unlines [ "  #" <> showText item.dueDateId <> "  " <> item.label <> ": day " <> showText item.dayOfMonth <> " of every month, reminded " <> showText item.warnDays <> " days ahead" | item <- due ]
+    ["add-due-date", label, dayText] -> addDueDateCommand label dayText Nothing
+    ["add-due-date", label, dayText, warnText] -> case readMaybe warnText of
+      Just warn -> addDueDateCommand label dayText (Just warn)
+      Nothing -> die ("WARN_DAYS must be a whole number, got " <> show warnText)
+    ["delete-due-date", numberText] -> case readMaybe numberText of
+      Just number -> withDatabase $ \pool -> runOrDie pool $ do
+        result <- deleteDueDate number
+        pure (either (Left . describeDueDateError) (const (Right "Deleted.")) result)
+      Nothing -> die ("DUE_DATE_ID must be a whole number, got " <> show numberText)
     ["owed"] -> withDatabase $ \pool -> do
       today <- utctDay <$> getCurrentTime
       people <- runSqlPool (whoOwesWhat today) pool
@@ -227,6 +259,15 @@ importFile path pool = do
   case result of
     Right outcome -> Text.putStr (renderImportOutcome outcome) >> putStrLn "Next: make post"
     Left importError -> Text.putStr (renderImportError importError) >> exitFailure
+
+addDueDateCommand :: String -> String -> Maybe Int -> IO ()
+addDueDateCommand label dayText warn = case readMaybe dayText of
+  Nothing -> die ("DAY must be a whole number from 1 to 31, got " <> show dayText)
+  Just day -> withDatabase $ \pool -> runOrDie pool $ do
+    result <- addDueDate (Text.pack label) day warn
+    pure $ case result of
+      Right _ -> Right ("Added: " <> Text.strip (Text.pack label) <> ", day " <> showText day <> " of every month.")
+      Left problem -> Left (describeDueDateError problem)
 
 addRuleText :: String -> Int -> ConnectionPool -> IO ()
 addRuleText ruleText priority pool = runOrDie pool $ do

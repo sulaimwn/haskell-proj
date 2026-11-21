@@ -2,6 +2,7 @@ module Main (main) where
 
 import Reckon.AnthropicSpec qualified as AnthropicSpec
 import Reckon.ApiSpec qualified as ApiSpec
+import Reckon.ChecksSpec qualified as ChecksSpec
 import Reckon.Api.TypesSpec qualified as TypesSpec
 import Reckon.Ledger.EntrySpec qualified as EntrySpec
 import Reckon.LedgerSpec qualified as LedgerSpec
@@ -21,6 +22,7 @@ import Reckon.ConfigSpec qualified as ConfigSpec
 import Reckon.Import.DedupeSpec qualified as DedupeSpec
 import Reckon.Import.RbcCsvSpec qualified as RbcCsvSpec
 import Reckon.ImportSpec qualified as ImportSpec
+import Reckon.JobsSpec qualified as JobsSpec
 import Reckon.ServerSpec qualified as ServerSpec
 import Test.Hspec (describe, hspec)
 
@@ -45,6 +47,8 @@ main = hspec $ do
   describe "Reckon.Posting" PostingSpec.spec
   describe "Reckon.Sharing and Reckon.People" SharingSpec.spec
   describe "Reckon.Rules and Reckon.Rules.History" RulesSpec.spec
+  describe "Reckon.Checks" ChecksSpec.spec
+  describe "Reckon.Jobs and Reckon.Reminders" JobsSpec.spec
   describe "Reckon.Screenshot.Import and Store" ScreenshotSpec.spec
   describe "Reckon.Server" ServerSpec.spec
   describe "The HTTP API" ApiSpec.spec
