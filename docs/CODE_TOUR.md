@@ -25,8 +25,9 @@ This grows with every phase. Every new module gets a section.
 - [Posting and reconciliation (Phase 3)](#posting-and-reconciliation-phase-3)
 - [Shared expenses (Phase 4)](#shared-expenses-phase-4)
 - [Reading screenshots with Claude (Phase 5)](#reading-screenshots-with-claude-phase-5)
+- [The HTTP API and the screens (Phase 6)](#the-http-api-and-the-screens-phase-6)
+- [The frontend (Phase 6)](#the-frontend-phase-6)
 - [Tests](#tests)
-- [Frontend](#frontend)
 - [Glossary](#glossary)
 
 ---
@@ -67,9 +68,10 @@ merged.
 main = do
   config <- loadConfig
   databasePool <- createDatabasePool config.databaseUrl databasePoolSize
-  let env = AppEnv {config, databasePool}
-  ...
-  runSettings settings (logStdoutDev (application env))
+  screenshotReading <- loadAnthropicConfig >>= \case ...   -- ReadingAvailable | ReadingUnavailable
+  let env = AppEnv {config, databasePool, screenshotReading}
+      settings = defaultSettings & setHost (fromString config.host) & setPort config.port
+  runSettings settings (logStdout (application env))
 ```
 
 - `do` notation sequences IO actions. `x <- action` runs an action and names
@@ -78,9 +80,14 @@ main = do
   it means `AppEnv {config = config, databasePool = databasePool}`.
 - `&` is reverse function application (`x & f = f x`). It lets the Warp
   settings read top-to-bottom like a builder.
-- `logStdoutDev` is **WAI middleware**: a function from `Application` to
-  `Application` that logs each request. Middleware composes by function
-  application.
+- `logStdout` is **WAI middleware**: a function from `Application` to
+  `Application` that logs each request (method, path, status). Middleware composes by function
+  application. It is deliberately not `logStdoutDev`, which also prints small request bodies: a
+  small CSV upload would land in the terminal (D066).
+- `setHost (fromString config.host)` is what keeps the API on loopback (D061). Without it Warp
+  listens on every interface.
+- Whether screenshots can be read is decided here, once: with `ANTHROPIC_API_KEY` set the
+  extractor is built and handed to the handlers inside `AppEnv`; without it they get a reason.
 
 **Q: Why is `main` so small?**
 A: Executables are hard to test. Everything testable is in the library, and
@@ -107,6 +114,9 @@ loadConfig :: IO Config
   on *which* error happened. `renderConfigError` turns it into a message for
   humans at the very edge.
 - `\case` (LambdaCase) is shorthand for `\x -> case x of ...`.
+- `Config` also carries `host` (`RECKON_HOST`, default `127.0.0.1`) and `allowedHosts` (a comma list,
+  default `localhost,127.0.0.1,[::1]`). Safe defaults live in the pure parser, and `ConfigSpec` tests
+  the default, a list with stray spaces and commas, and an empty value (D061).
 - `deriving stock (Show, Eq)`: GHC writes the `Show` and `Eq` instances.
   `stock` says to use GHC's built-in deriving (as opposed to `newtype` or
   `anyclass` deriving). Being explicit is a style choice enforced by
@@ -260,25 +270,23 @@ into a compile error, and CI fails if the committed `generated.ts` is stale.
 
 ```haskell
 server :: Routes (AsServerT AppM)
-server = Routes { health = getHealth }
-
-getHealth :: AppM HealthResponse
-getHealth = do
-  pool <- asks (.databasePool)
-  databaseStatus <- liftIO (pingDatabase pool)
-  pure HealthResponse {databaseStatus, serverVersion = reckonVersion}
+server = Routes { health = getHealth, accounts = \asOf -> asOfOrToday asOf >>= runDb . Views.accountSummaries, ... }
 
 application :: AppEnv -> Application
-application env = serve api (hoistServer api (runAppM env) server)
+application env =
+  hostGuard env.config.allowedHosts
+    (jsonOnlyWrites (serve api (hoistServer api (runAppM env) server)))
 ```
 
-- `liftIO` runs an `IO` action (`pingDatabase`) inside `AppM`.
+- `liftIO` runs an `IO` action inside `AppM`. `runDb` is `asks (.databasePool)` plus `runSqlPool`.
 - `hoistServer api (runAppM env) server` converts every handler from `AppM`
   to Servant's `Handler` by applying `runAppM env`. That's a **natural
   transformation**: a function that works for any result type `a`.
 - `serve` turns the server into a WAI `Application`, a plain function from
-  request to response that any WAI server (Warp) or test harness (hspec-wai)
-  can run.
+  request to response that any WAI server (Warp) or test harness can run.
+  `hostGuard` and `jsonOnlyWrites` are WAI `Middleware` (`Application -> Application`)
+  wrapped around it, so they run before Servant sees the request. See
+  [the HTTP API and the screens](#the-http-api-and-the-screens-phase-6).
 - `reckonVersion` comes from `Paths_reckon`, a module cabal generates with
   the package's version from `reckon.cabal`.
 
@@ -983,6 +991,156 @@ command prints, including a warning per alignment problem.
 
 ---
 
+## The HTTP API and the screens (Phase 6)
+
+Phase 6 turns every CLI command into an endpoint and adds the pages. The design is in
+D061–D065; this is the code.
+
+### `Reckon.Api` and `Reckon.Server`: one route per CLI command
+
+`Routes` (a `NamedRoutes` record) gained a field per endpoint, e.g.
+
+```haskell
+settleRow :: mode :- "rows" :> Capture "id" Int64 :> "settle" :> ReqBody '[JSON] SettleRequest :> Post '[JSON] ActionResult
+```
+
+so the path, the captured id, the body type and the answer type are one declaration, and a handler
+with the wrong type is a compile error. Handlers are thin: parse (`parseDay`, `decodeFile`,
+`bankAccountByLast4`), call the library function the CLI also calls, and turn the result into an
+`ActionResult` with `resultFrom` (first line is the headline, the rest are details).
+
+`refuse :: ServerError -> Text -> AppM a` is the one way to stop a request: it throws a Servant
+`ServerError` whose body is an `ApiProblem` as JSON. Status codes say whose fault it was (400
+malformed, 404 not found, 422 the ledger refused, 502 the model, 503 not configured).
+
+**Q: Why return `{message, details}` for every action instead of a typed result per action?**
+A: The CLI already had well-tested sentences for every outcome ("Posted 9 rows: 2 transfer legs..."),
+and the UI's job is to show them. A typed result per action would mean the frontend re-deriving
+those sentences, in a second language, and the two drifting. The wording lives once, in
+`Reckon.Messages`, used by both.
+
+### `Reckon.Messages`: refusals in words
+
+One function per error type (`describePostingError`, `describeSplitRowError`, ...) that turns a
+Haskell sum type into the sentence both the CLI and the API show. Pure and tiny. Pulling these out
+of `cli/Main.hs` is what let the server reuse them.
+
+### `Reckon.Views`: reads for the screens
+
+Read-only functions in `SqlPersistT`, each answering one screen's question in the API's own types
+(`AccountSummary`, `TransactionView`, `SpendingMonth`, `ReviewQueue`, ...).
+
+- `accountSummaries` uses persistent for entities and `rawSql` for the two "how many rows are
+  waiting" counts; the latest checkpoint is re-run through `reconcileAccount` so the explanation
+  is always current, not a stored snapshot.
+- `transactionsFor` is one SQL statement with `json_agg` collecting each entry's other lines
+  into a JSON column, decoded with aeson. Parameters that may be absent are passed as
+  `PersistNull` and tested in SQL (`?::date IS NULL OR ...`), so there is one query for every
+  combination of filters and no string-built SQL.
+- `reviewQueue` calls `Posting.reviewItems`, a **dry run** of posting: `postPendingRows` was split
+  into `planCurrentRows` (decide) and the part that writes, and `reviewItems` runs only the first.
+  The queue is therefore exactly what posting would leave behind, by construction, not a second
+  copy of the rules.
+- `wireCents :: Cents -> Int` is the one place the `Int64` ledger type narrows to the JSON number.
+  JavaScript numbers are exact for integers up to 2^53 cents (about $90 trillion).
+
+**Q: Why raw SQL for the transactions list?**
+A: It needs a join across five tables, an aggregate per entry, and optional filters. In esqueleto
+that is a page of type-level plumbing; here it is one readable statement. The rule in this repo is
+that SQL reads are fine when they're parameterised and tested, and every write still goes
+through the typed, constrained path.
+
+### `Reckon.Security`: three small middlewares
+
+`hostGuard :: [Text] -> Middleware` and `jsonOnlyWrites :: Middleware`. A WAI `Middleware` is
+`Application -> Application`, and an `Application` is `Request -> (Response -> IO ResponseReceived)
+-> IO ResponseReceived`, so a middleware that refuses just calls `respond` itself and never calls
+the inner application. `hostAllowed` (pure, tested with a table of names) strips the port and
+keeps the brackets of an IPv6 literal. The server's bind address is in `Config` (`host`, from
+`RECKON_HOST`), and `app/Main.hs` applies it with `setHost`.
+
+**Q: What is DNS rebinding and how does this stop it?**
+A: A malicious page at `evil.example.com` can have its DNS answer change from the attacker's server
+to `127.0.0.1` after the page loads. The browser then lets that page's scripts call
+`http://evil.example.com:8080/api/...` as same-origin, which actually reaches your local API, so
+no CORS rule applies. The request still says `Host: evil.example.com`, so the Host allowlist
+refuses it. Binding to loopback alone doesn't help (the traffic *is* loopback), and CORS alone
+doesn't help (the page is same-origin).
+
+**Q: Why test the guard three ways?**
+A: Each caught something the others couldn't. The in-process test found that a hand-built request
+sets the `Host` header but not Warp's `requestHeaderHost` field, so the guard reads both. The
+real-socket test (`testWithApplication`) proves the production path, where Warp fills the field in.
+And a mutation check (turn the guard into `True`) showed the JSON-only middleware was untested
+because Servant already refuses non-JSON bodies on routes that declare one, which is why it now
+has a test on a bare `Application` with no body.
+
+### `Reckon.App`: `screenshotReading`
+
+`AppEnv` gained `screenshotReading :: ScreenshotReading`, a sum type decided once at startup:
+`ReadingAvailable model extractor` when `ANTHROPIC_API_KEY` is set, else `ReadingUnavailable
+reason`. Handlers pattern-match on it, so "no key" is a value, not a null checked in places. Tests
+build an `AppEnv` with `ReadingAvailable` holding a scripted fake.
+
+### `ApiSpec`: the whole loop over HTTP
+
+`call env method path headers body` runs a request against `application env` with
+`Network.Wai.Test` (no socket). The headline test imports a CSV, posts, reads the review queue,
+settles three rows, records an opening balance and a statement, and asserts the account is
+RECONCILED, all through JSON. It pins the scenario's `asOf` date to the end of its own unique
+year, so it neither depends on today's date nor sees other tests' rows.
+
+---
+
+## The frontend (Phase 6)
+
+| File | Role |
+|---|---|
+| `src/main.tsx` | Mounts React and provides the TanStack Query `QueryClient` (the cache for server data) |
+| `src/App.tsx` | The shell: header, navigation, and a `switch` over the `Route` union to pick the page |
+| `src/lib/route.ts`, `useHashRoute.ts` | A hash router in ~30 lines: `parseRoute`/`hrefFor` are pure and round-trip tested; the hook listens to `hashchange` |
+| `src/lib/money.ts` | `formatCents` and `parseAmountToCents`: the only conversions between integer cents and text |
+| `src/lib/useAction.ts` | `useMutation` plus "invalidate every query on success" |
+| `src/lib/months.ts`, `bars.ts`, `plural.ts` | Small pure helpers (month names, UTC date arithmetic, a bar's width, "1 row / 2 rows") |
+| `src/api/generated.ts` | **Generated** API types. Never edited by hand. |
+| `src/api/client.ts` | One typed function per endpoint (`getJson`, `postJson`), `ApiError` that carries the server's `problem` text, and `toUploadedFile` (File → base64) |
+| `src/pages/*Page.tsx` | One component per screen |
+| `src/components/` | `Money`, `Notice` (shows a result or an error), `QueryState` (loading/error around a query), `BalanceForm`, `RowActions`, `LedgerAccountSelect`, `HealthBadge` |
+| `src/testing.tsx` | `fakeBackend` and `renderWithQueries` for the component tests |
+
+**Exhaustiveness.** `App`'s `Page` switch ends with `default: return route satisfies never`, and
+`reasonLabel` does the same for the generated `ReviewReasonKind`. Add a page or a review reason
+and the build fails until it is handled, including across the Haskell/TypeScript boundary.
+
+**Money.** Amounts are integer cents from the API to the screen. `formatCents` splits a number
+into dollars and cents with `%` and exact subtraction (no float division), and
+`parseAmountToCents` is a regex (`^-?\d+(\.\d{1,2})?$`) so "1.234" is refused rather than rounded.
+There is a test that formats and re-parses every amount from 0 to 20,000 cents.
+
+**Server state.** Pages read with `useQuery` and never copy the result into component state.
+Forms hold only what the person is typing. After any successful action `useAction` calls
+`queryClient.invalidateQueries()`, so every page refetches; with six small pages that is simpler
+than choosing which queries each action affects, and it can't leave one stale.
+
+**Testing without a network.** `fakeBackend({'GET /api/accounts': [...]})` replaces `fetch`,
+answers from a table, records every call, and throws on a request nobody expected. Tests assert
+both on what the user sees and on the exact JSON a form sent (`balanceCents: 155243`, not
+`1552.43`).
+
+**Q: Why no router, state-management or UI library?**
+A: Six pages and almost no client state. A hash router is 30 lines and a union type that the
+compiler checks. TanStack Query is the state manager for server data; a form's own state is
+`useState`. A component library would style forms and tables that are 90 lines of CSS here.
+Fewer dependencies is also less to keep current, which matters for a project that should
+still build in a year.
+
+**Q: How do you stop a cross-site page from posting to your local API?**
+A: See `Reckon.Security`. In short: writes must be `application/json`, which a cross-site form
+can't send without a CORS preflight that is never answered; the Host header must be one of ours,
+which stops DNS rebinding; and the server only listens on loopback.
+
+---
+
 ## Tests
 
 `backend/test/Main.hs` runs every spec with **hspec**, a BDD-style framework
@@ -1100,34 +1258,6 @@ goes further (D047): each test is a `Scenario` with its own account
 numbers, **its own year** (3000 + n, so no two tests' rows fall inside a
 pairing window), and its own tag in descriptions (so its rules only match
 its own rows). `forScenario` rewrites the fixture's text to match.
-
----
-
-## Frontend
-
-| File | Role |
-|---|---|
-| `src/main.tsx` | Mounts React and provides a TanStack Query `QueryClient` (the cache for server data) |
-| `src/App.tsx` | Page layout |
-| `src/api/generated.ts` | **Generated** API types. Never edited by hand. |
-| `src/api/client.ts` | `api.getHealth()` etc.: typed `fetch` wrappers, and `ApiError` for non-2xx responses |
-| `src/components/HealthBadge.tsx` | `useQuery` polls `/api/health` every 10 s and shows one of four states |
-
-Worth pointing out in `HealthBadge`:
-
-```ts
-switch (status) {
-  case 'reachable': ...
-  case 'unreachable': ...
-  default: return status satisfies never
-}
-```
-
-`DatabaseStatus` is the generated union `"reachable" | "unreachable"`. In the
-`default` branch TypeScript has narrowed `status` to `never`. If the backend
-adds a third status and the types are regenerated, `status` is no longer
-`never` there, and the build fails until the new case is handled. That's
-exhaustiveness checking across the language boundary.
 
 ---
 

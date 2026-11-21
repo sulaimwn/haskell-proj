@@ -8,6 +8,7 @@ module Reckon.App
 
 import Control.Monad.Reader (ReaderT, runReaderT)
 import Database.Persist.Postgresql (ConnectionPool)
+import Reckon.Anthropic (ScreenshotReading)
 import Reckon.Config (Config)
 import Servant (Handler)
 
@@ -15,6 +16,9 @@ import Servant (Handler)
 data AppEnv = AppEnv
   { config :: Config
   , databasePool :: ConnectionPool
+  , screenshotReading :: ScreenshotReading
+  -- ^ How screenshots are read. Set once at startup: it holds the model and
+  -- a function to call it with, and never the API key in any printable form.
   }
 
 -- | The monad handlers run in: they can read 'AppEnv' (@ReaderT@), and can

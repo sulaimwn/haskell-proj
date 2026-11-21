@@ -15,6 +15,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Database.Persist.Sql (Single (..), SqlPersistT, rawExecute, rawSql, runSqlPool)
+import Reckon.Anthropic (ScreenshotReading (..))
 import Reckon.App (AppEnv (..))
 import Reckon.Config (Config (..))
 import Reckon.Database (createDatabasePool)
@@ -77,4 +78,4 @@ makeEnvWithUnreachableDatabase =
 makeEnvFor :: ByteString -> IO AppEnv
 makeEnvFor url = do
   databasePool <- createDatabasePool url 1
-  pure AppEnv {config = Config {databaseUrl = url, port = 0}, databasePool}
+  pure AppEnv {config = Config {databaseUrl = url, port = 0, host = "127.0.0.1", allowedHosts = ["localhost"]}, databasePool, screenshotReading = ReadingUnavailable "not configured in tests"}

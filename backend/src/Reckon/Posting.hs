@@ -21,11 +21,14 @@ module Reckon.Posting
   , wellKnownAccounts
   , loadRules
   , currentEntryForRow
+  , ReviewItem (..)
+  , reviewItems
   ) where
 
 import Control.Monad (forM_, when)
 import Control.Monad.IO.Class (MonadIO)
 import Data.Bifunctor (first)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -74,17 +77,7 @@ postPendingRows = do
   -- Rows read from screenshots give way to the bank's own rows first: the
   -- provisional entry is reversed, then the bank's row is posted below.
   confirmed <- confirmProvisionalRows
-  wellKnown <- wellKnownAccounts
-  rules <- loadRules
-  people <- loadKnownPeople
-  unposted <- loadUnpostedRows
-  -- Rows already posted on a guess (uncategorized, or "payment to an
-  -- untracked card") can pair with a newly imported row, within the widest
-  -- pairing window of the new rows.
-  pairable <- case map (.transactionDate) unposted of
-    [] -> pure []
-    dates -> loadRepairableRows wellKnown (addDays (negate cancellationWindowDays) (minimum dates))
-  let plan = planPosting wellKnown rules people (unposted <> pairable)
+  plan <- planCurrentRows
 
   forM_ plan.postings $ \planned -> do
     when planned.replacesExistingEntry $ do
@@ -115,6 +108,52 @@ postPendingRows = do
     isRule = \case CategorizedByRule _ _ -> True; _ -> False
     isTransfer = \case TransferWith _ -> True; _ -> False
     isCancelledPair = \case CancelledPairWith _ -> True; _ -> False
+
+-- | What posting would do right now, without doing it: every unposted row,
+-- plus rows posted on a guess that a new row might pair with.
+planCurrentRows :: (MonadIO m) => SqlPersistT m (PostingPlan RawBankRowId LedgerAccountId)
+planCurrentRows = do
+  wellKnown <- wellKnownAccounts
+  rules <- loadRules
+  people <- loadKnownPeople
+  unposted <- loadUnpostedRows
+  -- Rows already posted on a guess (uncategorized, or "payment to an
+  -- untracked card") can pair with a newly imported row, within the widest
+  -- pairing window of the new rows.
+  pairable <- case map (.transactionDate) unposted of
+    [] -> pure []
+    dates -> loadRepairableRows wellKnown (addDays (negate cancellationWindowDays) (minimum dates))
+  pure (planPosting wellKnown rules people (unposted <> pairable))
+
+-- | An imported row that posting leaves for a person to decide.
+data ReviewItem = ReviewItem
+  { rowId :: RawBankRowId
+  , account :: Text
+  , date :: Day
+  , description :: Text
+  , amount :: Cents
+  , reason :: ReviewReason RawBankRowId
+  }
+  deriving stock (Show, Eq)
+
+-- | The rows the next @post@ would leave for review, without posting
+-- anything.
+reviewItems :: (MonadIO m) => SqlPersistT m [ReviewItem]
+reviewItems = do
+  plan <- planCurrentRows
+  nicknames <- rawSql "SELECT ledger_account_id, nickname FROM bank_accounts" []
+  let nicknameOf ledgerAccount = Map.findWithDefault "" ledgerAccount (Map.fromList [(accountId, nickname) | (Single accountId, Single nickname) <- nicknames])
+  pure
+    [ ReviewItem
+        { rowId = row.rowId
+        , account = nicknameOf row.bankAccount
+        , date = row.transactionDate
+        , description = entryDescription row
+        , amount = row.amount
+        , reason
+        }
+    | (row, reason) <- plan.leftForReview
+    ]
 
 -- | One entry per row: the row's amount on its bank's ledger account,
 -- balanced by the counter account, with the row recorded as its evidence.

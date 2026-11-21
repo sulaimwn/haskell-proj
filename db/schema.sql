@@ -1,6 +1,6 @@
 \restrict dbmate
 
--- Dumped from database version 17.11 (Debian 17.11-1.pgdg13+2)
+-- Dumped from database version 17.12 (Debian 17.12-1.pgdg13+1)
 -- Dumped by pg_dump version 18.6
 
 SET statement_timeout = 0;
@@ -171,6 +171,13 @@ CREATE TABLE public.bank_accounts (
     CONSTRAINT bank_accounts_last4_check CHECK ((last4 ~ '^[0-9]{4}$'::text)),
     CONSTRAINT bank_accounts_nickname_check CHECK ((nickname <> ''::text))
 );
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN id SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN institution SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN account_kind SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN last4 SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN nickname SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN ledger_account_id SET (pg_attver=31301624);
+ALTER TABLE ONLY public.bank_accounts ALTER COLUMN created_at SET (pg_attver=31301624);
 
 
 --
@@ -199,6 +206,11 @@ CREATE TABLE public.categorization_rules (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT categorization_rules_description_contains_check CHECK (((description_contains <> ''::text) AND (description_contains = upper(description_contains))))
 );
+ALTER TABLE ONLY public.categorization_rules ALTER COLUMN id SET (pg_attver=31522928);
+ALTER TABLE ONLY public.categorization_rules ALTER COLUMN description_contains SET (pg_attver=31522928);
+ALTER TABLE ONLY public.categorization_rules ALTER COLUMN ledger_account_id SET (pg_attver=31522928);
+ALTER TABLE ONLY public.categorization_rules ALTER COLUMN priority SET (pg_attver=31522928);
+ALTER TABLE ONLY public.categorization_rules ALTER COLUMN created_at SET (pg_attver=31522928);
 
 
 --
@@ -230,6 +242,12 @@ CREATE TABLE public.import_batch_coverage (
     CONSTRAINT import_batch_coverage_rows_added_check CHECK ((rows_added >= 0)),
     CONSTRAINT import_batch_coverage_rows_in_file_check CHECK ((rows_in_file > 0))
 );
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN batch_id SET (pg_attver=31357752);
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN bank_account_id SET (pg_attver=31357752);
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN first_date SET (pg_attver=31357752);
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN last_date SET (pg_attver=31357752);
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN rows_in_file SET (pg_attver=31357752);
+ALTER TABLE ONLY public.import_batch_coverage ALTER COLUMN rows_added SET (pg_attver=31357752);
 
 
 --
@@ -245,6 +263,11 @@ CREATE TABLE public.import_batches (
     CONSTRAINT import_batches_file_sha256_check CHECK ((file_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT import_batches_source_check CHECK ((source = ANY (ARRAY['csv'::text, 'screenshot'::text])))
 );
+ALTER TABLE ONLY public.import_batches ALTER COLUMN id SET (pg_attver=31337032);
+ALTER TABLE ONLY public.import_batches ALTER COLUMN source SET (pg_attver=31337032);
+ALTER TABLE ONLY public.import_batches ALTER COLUMN file_sha256 SET (pg_attver=31337032);
+ALTER TABLE ONLY public.import_batches ALTER COLUMN file_name SET (pg_attver=31337032);
+ALTER TABLE ONLY public.import_batches ALTER COLUMN imported_at SET (pg_attver=31337032);
 
 
 --
@@ -277,6 +300,14 @@ CREATE TABLE public.import_review_items (
     CONSTRAINT import_review_items_check CHECK (((kind = 'possible_duplicate'::text) = (related_raw_bank_row_id IS NOT NULL))),
     CONSTRAINT import_review_items_kind_check CHECK ((kind = ANY (ARRAY['missing_from_newer_export'::text, 'possible_duplicate'::text])))
 );
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN id SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN batch_id SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN bank_account_id SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN transaction_date SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN kind SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN raw_bank_row_id SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN related_raw_bank_row_id SET (pg_attver=31424104);
+ALTER TABLE ONLY public.import_review_items ALTER COLUMN created_at SET (pg_attver=31424104);
 
 
 --
@@ -307,6 +338,12 @@ CREATE TABLE public.journal_entries (
     CONSTRAINT journal_entries_check CHECK (((reverses_entry_id IS NULL) OR (reverses_entry_id <> id))),
     CONSTRAINT journal_entries_description_check CHECK ((description <> ''::text))
 );
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN id SET (pg_attver=31158704);
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN occurred_on SET (pg_attver=31158704);
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN description SET (pg_attver=31158704);
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN reverses_entry_id SET (pg_attver=31158704);
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN created_at SET (pg_attver=31158704);
+ALTER TABLE ONLY public.journal_entries ALTER COLUMN created_in_transaction SET (pg_attver=31158704);
 
 
 --
@@ -331,6 +368,8 @@ CREATE TABLE public.journal_entry_evidence (
     entry_id bigint NOT NULL,
     raw_bank_row_id bigint NOT NULL
 );
+ALTER TABLE ONLY public.journal_entry_evidence ALTER COLUMN entry_id SET (pg_attver=31498840);
+ALTER TABLE ONLY public.journal_entry_evidence ALTER COLUMN raw_bank_row_id SET (pg_attver=31498840);
 
 
 --
@@ -344,6 +383,10 @@ CREATE TABLE public.journal_lines (
     amount_cents bigint NOT NULL,
     CONSTRAINT journal_lines_amount_cents_check CHECK ((amount_cents <> 0))
 );
+ALTER TABLE ONLY public.journal_lines ALTER COLUMN id SET (pg_attver=31194480);
+ALTER TABLE ONLY public.journal_lines ALTER COLUMN entry_id SET (pg_attver=31194480);
+ALTER TABLE ONLY public.journal_lines ALTER COLUMN ledger_account_id SET (pg_attver=31194480);
+ALTER TABLE ONLY public.journal_lines ALTER COLUMN amount_cents SET (pg_attver=31194480);
 
 
 --
@@ -374,6 +417,11 @@ CREATE TABLE public.ledger_accounts (
     CONSTRAINT ledger_accounts_currency_check CHECK ((currency = 'CAD'::text)),
     CONSTRAINT ledger_accounts_name_check CHECK ((name ~ '^[a-z]+(:[a-z0-9-]+)+$'::text))
 );
+ALTER TABLE ONLY public.ledger_accounts ALTER COLUMN id SET (pg_attver=31110272);
+ALTER TABLE ONLY public.ledger_accounts ALTER COLUMN name SET (pg_attver=31110272);
+ALTER TABLE ONLY public.ledger_accounts ALTER COLUMN account_type SET (pg_attver=31110272);
+ALTER TABLE ONLY public.ledger_accounts ALTER COLUMN currency SET (pg_attver=31110272);
+ALTER TABLE ONLY public.ledger_accounts ALTER COLUMN created_at SET (pg_attver=31110272);
 
 
 --
@@ -399,6 +447,9 @@ CREATE TABLE public.opening_balances (
     bank_account_id bigint NOT NULL,
     as_of_date date NOT NULL
 );
+ALTER TABLE ONLY public.opening_balances ALTER COLUMN entry_id SET (pg_attver=31568216);
+ALTER TABLE ONLY public.opening_balances ALTER COLUMN bank_account_id SET (pg_attver=31568216);
+ALTER TABLE ONLY public.opening_balances ALTER COLUMN as_of_date SET (pg_attver=31568216);
 
 
 --
@@ -414,6 +465,11 @@ CREATE TABLE public.people (
     CONSTRAINT people_match_text_check CHECK (((match_text <> ''::text) AND (match_text = upper(match_text)))),
     CONSTRAINT people_name_check CHECK ((name ~ '^[a-z0-9][a-z0-9-]*$'::text))
 );
+ALTER TABLE ONLY public.people ALTER COLUMN id SET (pg_attver=31596200);
+ALTER TABLE ONLY public.people ALTER COLUMN name SET (pg_attver=31596200);
+ALTER TABLE ONLY public.people ALTER COLUMN match_text SET (pg_attver=31596200);
+ALTER TABLE ONLY public.people ALTER COLUMN ledger_account_id SET (pg_attver=31596200);
+ALTER TABLE ONLY public.people ALTER COLUMN created_at SET (pg_attver=31596200);
 
 
 --
@@ -443,6 +499,11 @@ CREATE TABLE public.provisional_resolutions (
     CONSTRAINT provisional_resolutions_check CHECK ((((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text])) AND (raw_bank_row_id IS NOT NULL) AND (superseded_by_screenshot_row_id IS NULL)) OR ((kind = 'superseded_by_screenshot'::text) AND (superseded_by_screenshot_row_id IS NOT NULL) AND (raw_bank_row_id IS NULL)) OR ((kind = 'released'::text) AND (raw_bank_row_id IS NULL) AND (superseded_by_screenshot_row_id IS NULL)))),
     CONSTRAINT provisional_resolutions_kind_check CHECK ((kind = ANY (ARRAY['confirmed_by_csv'::text, 'already_in_csv'::text, 'superseded_by_screenshot'::text, 'released'::text])))
 );
+ALTER TABLE ONLY public.provisional_resolutions ALTER COLUMN screenshot_row_id SET (pg_attver=83528528);
+ALTER TABLE ONLY public.provisional_resolutions ALTER COLUMN kind SET (pg_attver=83528528);
+ALTER TABLE ONLY public.provisional_resolutions ALTER COLUMN raw_bank_row_id SET (pg_attver=83528528);
+ALTER TABLE ONLY public.provisional_resolutions ALTER COLUMN superseded_by_screenshot_row_id SET (pg_attver=83528528);
+ALTER TABLE ONLY public.provisional_resolutions ALTER COLUMN created_at SET (pg_attver=83528528);
 
 
 --
@@ -462,6 +523,16 @@ CREATE TABLE public.raw_bank_rows (
     occurrence integer NOT NULL,
     CONSTRAINT raw_bank_rows_occurrence_check CHECK ((occurrence >= 1))
 );
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN id SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN bank_account_id SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN first_seen_batch_id SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN transaction_date SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN description_1 SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN description_2 SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN cheque_number SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN amount_cents SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN fingerprint SET (pg_attver=31388608);
+ALTER TABLE ONLY public.raw_bank_rows ALTER COLUMN occurrence SET (pg_attver=31388608);
 
 
 --
@@ -485,6 +556,7 @@ ALTER TABLE public.raw_bank_rows ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTIT
 CREATE TABLE public.schema_migrations (
     version character varying NOT NULL
 );
+ALTER TABLE ONLY public.schema_migrations ALTER COLUMN version SET (pg_attver=30986784);
 
 
 --
@@ -495,6 +567,8 @@ CREATE TABLE public.screenshot_entry_evidence (
     entry_id bigint NOT NULL,
     screenshot_row_id bigint NOT NULL
 );
+ALTER TABLE ONLY public.screenshot_entry_evidence ALTER COLUMN entry_id SET (pg_attver=83505120);
+ALTER TABLE ONLY public.screenshot_entry_evidence ALTER COLUMN screenshot_row_id SET (pg_attver=83505120);
 
 
 --
@@ -518,6 +592,18 @@ CREATE TABLE public.screenshot_rows (
     CONSTRAINT screenshot_rows_description_check CHECK ((description <> ''::text)),
     CONSTRAINT screenshot_rows_occurrence_check CHECK ((occurrence >= 1))
 );
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN id SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN upload_id SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN bank_account_id SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN transaction_date SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN description SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN amount_cents SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN running_balance_cents SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN is_pending SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN uncertain SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN fingerprint SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN occurrence SET (pg_attver=83462080);
+ALTER TABLE ONLY public.screenshot_rows ALTER COLUMN created_at SET (pg_attver=83462080);
 
 
 --
@@ -553,6 +639,16 @@ CREATE TABLE public.screenshot_uploads (
     CONSTRAINT screenshot_uploads_model_id_check CHECK ((model_id <> ''::text)),
     CONSTRAINT screenshot_uploads_partial_rows_dropped_check CHECK ((partial_rows_dropped >= 0))
 );
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN id SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN file_sha256 SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN file_name SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN bank_account_id SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN taken_on SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN model_id SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN account_label SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN extraction_json SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN partial_rows_dropped SET (pg_attver=83365648);
+ALTER TABLE ONLY public.screenshot_uploads ALTER COLUMN created_at SET (pg_attver=83365648);
 
 
 --
@@ -580,6 +676,11 @@ CREATE TABLE public.statement_checkpoints (
     statement_balance_cents bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
+ALTER TABLE ONLY public.statement_checkpoints ALTER COLUMN id SET (pg_attver=31550392);
+ALTER TABLE ONLY public.statement_checkpoints ALTER COLUMN bank_account_id SET (pg_attver=31550392);
+ALTER TABLE ONLY public.statement_checkpoints ALTER COLUMN as_of_date SET (pg_attver=31550392);
+ALTER TABLE ONLY public.statement_checkpoints ALTER COLUMN statement_balance_cents SET (pg_attver=31550392);
+ALTER TABLE ONLY public.statement_checkpoints ALTER COLUMN created_at SET (pg_attver=31550392);
 
 
 --

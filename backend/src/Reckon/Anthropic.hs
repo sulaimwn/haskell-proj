@@ -26,6 +26,7 @@ module Reckon.Anthropic
 
     -- * Reading a screenshot
   , Extractor
+  , ScreenshotReading (..)
   , ClientError (..)
   , renderClientError
   , anthropicExtractor
@@ -134,6 +135,14 @@ detectMediaType content
 -- | What a screenshot is turned into: the model's reply text, which is JSON
 -- following 'extractionSchema'.
 type Extractor = ImageInput -> IO (Either ClientError ByteString)
+
+-- | Whether the running server can read screenshots, decided once at
+-- startup from the environment.
+data ScreenshotReading
+  = -- | The model's name, and the function that calls it.
+    ReadingAvailable Text Extractor
+  | -- | Why not (no key set).
+    ReadingUnavailable Text
 
 data ClientError
   = -- | The request never got a response (DNS, TLS, timeout, ...).

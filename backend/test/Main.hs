@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Reckon.AnthropicSpec qualified as AnthropicSpec
+import Reckon.ApiSpec qualified as ApiSpec
 import Reckon.Api.TypesSpec qualified as TypesSpec
 import Reckon.Ledger.EntrySpec qualified as EntrySpec
 import Reckon.LedgerSpec qualified as LedgerSpec
@@ -42,3 +43,4 @@ main = hspec $ do
   describe "Reckon.Sharing and Reckon.People" SharingSpec.spec
   describe "Reckon.Screenshot.Import and Store" ScreenshotSpec.spec
   describe "Reckon.Server" ServerSpec.spec
+  describe "The HTTP API" ApiSpec.spec

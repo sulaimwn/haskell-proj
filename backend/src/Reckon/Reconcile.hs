@@ -15,6 +15,8 @@ module Reckon.Reconcile
   , reconcileAccount
   , reconcileAllCheckpoints
   , renderReconciliationReport
+  , renderFindings
+  , bankLedgerType
   ) where
 
 import Control.Monad (forM, forM_)
@@ -198,7 +200,11 @@ renderReconciliationReport report =
     , "  statement " <> renderCents report.inputs.statementBalance
         <> ", ledger " <> renderCents report.inputs.ledgerBalance
     ]
-      <> concatMap renderFinding report.findings
+      <> renderFindings report.findings
+
+-- | The findings in words, one line (or a few indented lines) each.
+renderFindings :: [Finding] -> [Text]
+renderFindings = concatMap renderFinding
   where
     renderFinding = \case
       Reconciled -> ["  RECONCILED: the ledger matches the statement to the cent."]
@@ -221,5 +227,6 @@ renderReconciliationReport report =
       Unexplained difference ->
         ["  OFF BY " <> renderCents difference <> " (statement minus ledger), and nothing above explains it."]
     renderRow row = "    " <> showText row.transactionDate <> "  " <> renderCents row.naturalAmount <> "  " <> row.description
-    showText :: (Show a) => a -> Text
-    showText = Text.pack . show
+
+showText :: (Show a) => a -> Text
+showText = Text.pack . show

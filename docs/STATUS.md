@@ -3,16 +3,17 @@
 **The handoff doc.** If you're picking this project up, read this first,
 then [CLAUDE.md](../CLAUDE.md). Updated in every PR.
 
-_Last updated: 2026-11-20, end of Phase 5._
+_Last updated: 2026-11-21, end of Phase 6._
 
 ## Where we are
 
-**Phase 5 (screenshot ingestion with Claude) is complete**, except that it
-has never talked to the real API (see "Unverified" below). Phases 3, 4 and 5
-are stacked on one branch and in one PR, because the owner asked for work to
-continue without waiting for review ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4),
-one commit per phase, so they can be reviewed separately). Nothing has been
-merged by Claude. Phase 6 (the frontend) is next.
+**Phase 6 (the frontend) is complete.** The web UI does everything the command
+line does, and nothing in it has been used with real data or a real API key
+yet (see "Unverified" below). Phases 3 to 6 are stacked on one branch and in
+one PR, because the owner asked for work to continue without waiting for review
+([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4), one commit per
+phase, so they can be reviewed separately). Nothing has been merged by Claude.
+Phase 7 (scheduled jobs and a rule language) is next.
 
 | Phase | Status |
 |---|---|
@@ -22,13 +23,28 @@ merged by Claude. Phase 6 (the frontend) is next.
 | 3: Evidence → entries, transfers, reconciliation | ✅ done, in review ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4)) |
 | 4: Shared expenses and receivables | ✅ done, same PR (stacked on 3) |
 | 5: Screenshot ingestion with Claude | ✅ done, same PR (stacked on 4) |
-| 6: Frontend | ⏭ next |
-| 7–8 | not started |
+| 6: Frontend | ✅ done, same PR (stacked on 5) |
+| 7: Scheduled jobs and rules | ⏭ next |
+| 8: Demo and README | not started |
 
 ## What works today
 
-The full loop, from a bank export to a reconciled ledger, on the command
-line. Step by step: [DEVELOPMENT.md](DEVELOPMENT.md#from-import-to-a-reconciled-ledger).
+**The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Six pages:
+
+| Page | What it does |
+|---|---|
+| Accounts | Each account's balance, rows not yet posted, and the latest statement's reconciliation (RECONCILED, or a gap with its explanation). "Post imported rows", record a statement balance, set an opening balance. |
+| Transactions | An account's entries with date and text filters; recategorize a row or split it with friends. Corrected entries show once. |
+| Spending | Spending per expense category, month by month, with bars. Transfers, friends' shares and refunds are not spending. |
+| Receivables | What each friend owes you; add a friend. |
+| Review | Rows the ledger wouldn't post on its own (settle them, or apply a possible repayment to the friend it names), screenshot rows waiting for a CSV (release one), importer warnings, add a rule. |
+| Import | Upload a bank CSV, or screenshots of the RBC app (needs `ANTHROPIC_API_KEY`). |
+
+The API behind it has no login, so it listens on loopback only and refuses
+other host names and non-JSON writes (D061). Everything below it is also
+available on the command line.
+
+**The command line:** the full loop, from a bank export to a reconciled ledger. Step by step: [DEVELOPMENT.md](DEVELOPMENT.md#from-import-to-a-reconciled-ledger).
 
 ```bash
 make import file=private/export.csv                     # evidence
@@ -127,10 +143,9 @@ database; reversals; balances as of a date.
 **Skeleton (Phase 0):** `make dev`, `/api/health` with a live badge,
 TypeScript types generated from Haskell, the privacy guard, CI.
 
-Tests: 199 examples (hspec + hedgehog properties, including model-based and
-database properties; none call the real API). `make check` passes.
-
-There's no UI for any of this yet. That's Phase 6.
+Tests: 214 backend examples (hspec + hedgehog properties, including model-based and
+database properties; none call the real API) and 29 frontend tests (Vitest, with a fake
+`fetch`). `make check` passes.
 
 ## Decisions the owner should check (made while they were away)
 
@@ -157,14 +172,21 @@ option was taken. All are easy to change now, harder later. **D038**:
    owner. It's the most capable but also the costliest way to read a
    screenshot. Set `ANTHROPIC_MODEL` to try another, and use
    `eval-screenshots` to compare them on your own screenshots.
-6. **Screenshots are read from the command line**, not uploaded from a web
-   page (D060): the upload page comes with the frontend in Phase 6. The
-   account is named by its last 4 digits and must already have had a CSV imported.
+6. **Screenshots are uploaded from the Import page or the command line.** The
+   account is chosen by its last 4 digits (the model never returns account
+   numbers) and must already have had a CSV imported.
+7. **The UI has no login** (D061): it relies on loopback binding, a Host
+   allowlist and JSON-only writes. Fine for a laptop; a login is needed before
+   Phase 8 puts it anywhere else.
 
 Pending transactions and debit holds (scope change **D045**) were built in
 Phase 5, as described above.
 
 ## Unverified against real data
+
+**The UI has been exercised only with fixture data** (component tests with a
+fake `fetch`, the API's own tests, and headless-Chromium screenshots of every
+page against the fake CSV fixtures). No real RBC data has passed through it.
 
 **Phase 5 has never talked to the real Anthropic API or seen a real RBC
 screenshot.** Everything is tested against fakes: scripted replies,
@@ -201,20 +223,17 @@ Nothing else here has been run on a real RBC export yet either. When the owner d
   MASTERCARD, AMEX, AMERICAN EXPRESS or CREDIT CARD. Real descriptions may
   differ. `make post`'s summary shows what was recognized.
 
-## What's next: Phase 6 (frontend)
+## What's next: Phase 7 (scheduled jobs and a rule language)
 
-From [SPEC.md](SPEC.md#phase-6-frontend): accounts overview (balances, reconciliation status),
-an import page (CSV and screenshots), the review queue, the transaction list (filter, split with
-friends), spending by category per month (excluding transfers and friends' shares), and
-receivables. Everything the CLI does today becomes an HTTP endpoint with generated TypeScript
-types (`Reckon.Api.Types`) and a page.
+From [SPEC.md](SPEC.md#phase-7-scheduled-jobs-and-rules): a Postgres-backed job queue that runs
+recurring checks (statement periods with no checkpoint, provisional entries nobody confirmed after
+N days, upcoming due dates), and a small categorization rule language parsed and evaluated in
+Haskell, with validation errors shown in the frontend, split rules, and "preview against past
+transactions".
 
-Things to decide at the start of Phase 6:
-- Screenshot upload: files go to the backend over HTTP (multipart), which calls the API. The key
-  never reaches the browser.
-- The review queue is where import flags (D031), ambiguous pairings (D041), possible repayments
-  (D050), uncertain screenshot rows and open provisional rows all land today as CLI text.
-- Whether to add a login before anything is deployed (Phase 8). It's single-user and local so far.
+Things to decide at the start of Phase 7:
+- Whether the rule language replaces the "description contains TEXT" rules (D044) or sits on top of them.
+- Where scheduled-job results show up: probably the Review page's "Worth a look" list.
 
 ## Open questions for the owner
 
@@ -234,27 +253,27 @@ Things to decide at the start of Phase 6:
 ## Known issues and tech debt
 
 - **Screenshot rows can't be corrected by hand.** A misread row stays as read until the CSV
-  confirms or replaces it; `release-provisional` only handles holds that never posted. Phase 6's
-  review queue is the place for correcting one.
+  confirms or replaces it; "Release" (and `release-provisional`) only handles holds that never
+  posted. A correct-this-row form on the Review page is the missing piece.
 - **Screenshots of a card account** work like any other, but a card's provisional entries use
   the same sign rules as its CSV (purchases negative), which is itself unverified.
 - **One scroll per command.** Two separate scrolls can be imported in two commands (the rows
   they share are skipped), but the join between them is not checked for gaps.
 - **The model is called one image at a time**, sequentially, with no cost estimate before it runs.
-- **Review items repeat.** Until Phase 6 adds a way to resolve them, a later
-  overlapping import can flag the same situation again (e.g. the old version
-  of a renamed row is "missing" from every newer export).
+- **Review items repeat.** The Review page lists import warnings ("worth a look") but can't
+  dismiss them, so a later overlapping import can flag the same situation again (e.g. the old
+  version of a renamed row is "missing" from every newer export).
 - **Rules don't re-categorize the past.** A rule added after posting only
   affects rows posted later (D044). `recategorize` fixes one row at a time
   (D051). Phase 7's "preview against past transactions" is the bulk answer.
-- **A typo in an account name creates a new account**, and accounts can't be
-  deleted (append-only). `make db-psql`, `SELECT name FROM ledger_accounts`
-  shows what exists. Worth validating against known accounts (or a
-  confirmation) before the UI.
+- **A typo in an account name on the command line creates a new account**, and accounts can't
+  be deleted (append-only). The web UI avoids this by choosing from existing accounts (a
+  select), but it can't create one; `make db-psql`, `SELECT name FROM ledger_accounts` shows
+  what exists. The CLI should validate against known accounts too.
 - **A split can't be edited, only replaced.** Splitting again reverses the
   previous split and posts a new one, leaving the history in the journal.
-- **Person names are lower-case slugs** (`alex`), not display names. A
-  display name belongs with the Phase 6 UI.
+- **Person names are lower-case slugs** (`alex`), not display names, and the UI shows them as
+  stored. There is no endpoint that lists people, so the split form takes names as text.
 - **Settling a review row is by id only.** `post-row` doesn't check that
   the two legs of a transfer you settle by hand actually balance through
   clearing. `make reconcile` will show it if they don't.
@@ -268,5 +287,10 @@ Things to decide at the start of Phase 6:
 - persistent entities are kept in step with the SQL by hand (D028). Every
   table is exercised through persistent in tests.
 - `check_journal_entry` runs once per inserted row. Negligible at this scale.
-- The frontend has no unit tests yet. Vitest arrives with real display logic
-  (Phase 6).
+- **The reconciliation explanation is shared with the command line**, so the UI shows some
+  CLI wording (e.g. "record it with: scripts/reckon.sh opening-balance ..."). The UI has the
+  "Record a statement" form for the same job. Worth splitting the wording per surface.
+- **The UI shows at most the newest 200 transactions** of an account (narrow by date or text
+  to see older ones), and can't list or edit people and rules, only add them (D065).
+- **Opening the dev server by a LAN address is refused (403)** by the Host guard (D061); add
+  the name to `RECKON_ALLOWED_HOSTS` and widen `RECKON_HOST` if that's really wanted.

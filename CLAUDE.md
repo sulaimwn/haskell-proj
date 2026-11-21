@@ -59,6 +59,9 @@ misled about the current state?* If yes, fix the docs.
 - **API types are declared once**, in `backend/src/Reckon/Api/Types.hs` with
   `deriveJSONAndTypeScript`, and added to `typeScriptDeclarations`. Run
   `make codegen`. Never hand-write an API type in TypeScript.
+- **API security (D061):** the server is login-less, so it binds loopback and runs behind
+  `hostGuard` and `jsonOnlyWrites` (`Reckon.Security`). Don't bypass them, don't add a route
+  that returns data without going through `Server.application`, and don't widen the bind.
 - **JSON:** record fields go over the wire verbatim (camelCase). Enums use
   `enumOptions "<Prefix>"` and become snake_case strings.
 - **Haskell style:** GHC2024 plus `OverloadedRecordDot`, `DuplicateRecordFields`
@@ -66,6 +69,9 @@ misled about the current state?* If yes, fix the docs.
   / `anyclass` explicitly. Qualified imports for containers and text
   (`import Data.Text qualified as Text`). Keep pure logic separate from IO so
   it can be tested without a database.
+- **Frontend:** strict TypeScript; types only from `generated.ts`; money is integer cents and
+  goes to and from text only through `lib/money.ts`; every action uses `useAction` (it
+  invalidates all queries); pages show the server's own `problem`/`message` text verbatim.
 - **Tests:** hspec for examples, hedgehog for properties (from Phase 1).
   Database tests use `TEST_DATABASE_URL` and fail, not skip, without it.
   Tests never call the real Claude API.
@@ -96,6 +102,7 @@ make post       # post imported rows to the journal
 make reconcile  # compare the ledger with every recorded statement balance
 make owed       # what friends owe you
 make provisional  # rows read from screenshots that no bank CSV has confirmed yet
+cd frontend && npm test   # frontend tests (also part of make check)
 scripts/reckon.sh COMMAND ...   # any reckon-cli command (post-row, recategorize, add-rule, add-person, split-row, spending, import-screenshots, release-provisional, eval-screenshots, opening-balance, checkpoint)
 ```
 
@@ -150,6 +157,15 @@ docs/        see the table above
   numbers, a unique year (so pairing windows never overlap another test's
   rows) and a unique description tag for rules. Assert only on the
   scenario's own rows (DECISIONS D047).
+- `hostGuard` reads Warp's `requestHeaderHost`, falling back to the `Host` header, because
+  `Network.Wai.Test` requests built by hand set only the header. A guard test must also run over
+  a real socket (`testWithApplication`, as ApiSpec does), and Servant already answers 415 for
+  routes with a JSON `ReqBody`, so test `jsonOnlyWrites` on a bare `Application`.
+- API handlers get their wording from `Reckon.Messages`, the same module the CLI uses. Add a
+  refusal there, once, and map it to a status in `Server.hs` (`refuse`).
+- Frontend component tests use `fakeBackend` (`src/testing.tsx`): it answers `"METHOD /path"`
+  from a table and fails the test on an unexpected request. Assert on the JSON a form sent, not
+  just on what the page showed afterwards.
 - Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
   and IO in their callers. Pure planners are generic in their id and
   account types so tests can use `Int` and `Text`.

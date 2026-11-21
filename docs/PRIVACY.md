@@ -22,7 +22,11 @@ are non-negotiable.
    anything you don't want sent before reading them. Keep screenshots, and the
    hand-written labels for the evaluation, in `private/` (e.g. `private/screenshots`,
    `private/eval`): the commit guard blocks images anywhere else.
-7. **Only what the model read is kept, not the image.** The database stores the
+7. **The API is reachable only from your own browser (Phase 6).** It has no login, so
+   `reckon-server` binds `127.0.0.1`, refuses requests addressed to any other host name
+   (DNS rebinding), and refuses writes that aren't JSON (cross-site forms). Don't widen
+   `RECKON_HOST` or `RECKON_ALLOWED_HOSTS`; a login must come first (D061).
+8. **Only what the model read is kept, not the image.** The database stores the
    image's SHA-256, its file name, and the model's *validated* reply. The model
    is told never to return an account number, and the reply is rejected if any
    description or the account label contains nine or more digits in a row.
@@ -36,6 +40,7 @@ are non-negotiable.
 | CI (`privacy-guard` job) | The same check over every tracked file, so a commit made without the hook still fails CI. |
 | Code | The RBC parser keeps only the last 4 digits (`Last4` can't hold more), `bank_accounts.last4` has a 4-digit CHECK, and a test scans every stored column after an import to prove the full number appears nowhere. |
 | Code (Phase 5) | `ApiKey` has a hand-written `Show` that prints `<redacted>`; the request header is marked redacted; errors are built from the API's response, never from the request; a test asserts the key appears in no error or `show` output. Tests never call the real API: they use scripted fakes, hand-written fixtures (`fixtures/screenshots`, no real screenshot), and an in-process stub server. `parseExtraction` rejects a reply with an account-number-shaped digit run before anything is stored. |
+| Network (Phase 6) | `Reckon.Config` defaults `RECKON_HOST` to `127.0.0.1`; `hostGuard` answers 403 to any `Host` not in `RECKON_ALLOWED_HOSTS`; `jsonOnlyWrites` answers 415 to a write that isn't JSON. Tested in-process, over a real socket, and by mutation (the guards disabled make tests fail). Uploaded CSVs and screenshots travel from the browser to the local server only; the server forwards screenshots (not CSVs) to Anthropic. Request logging is Apache-style (method, path, status) and never includes bodies (D066). |
 | Workflow | `make import` warns if the file isn't under `private/`. `make post`, `make reconcile`, `owed`, `spending` and `checkpoint` print real descriptions, names and amounts to your terminal: when asking for help, share the kind of problem (e.g. "3 rows left for review, ambiguous transfer") or the parser's line-numbered errors, not the output itself. |
 
 The hook runs **before** the commit, which matters: once something reaches a

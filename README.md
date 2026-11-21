@@ -27,8 +27,8 @@ Built in phases. Details: [docs/STATUS.md](docs/STATUS.md).
 | 3 | Evidence → entries, transfer pairing, statement reconciliation | ✅ done |
 | 4 | Shared expenses and receivables | ✅ done |
 | 5 | Screenshot ingestion with Claude | ✅ done |
-| 6 | Frontend | next |
-| 7 | Scheduled jobs and a categorization rule language | |
+| 6 | Frontend: accounts, transactions, spending, receivables, review queue, import | ✅ done |
+| 7 | Scheduled jobs and a categorization rule language | next |
 | 8 | Demo dataset and write-up | |
 
 ## Quickstart (Ubuntu)
@@ -40,7 +40,7 @@ setup steps.
 ```bash
 git clone https://github.com/sulaimwn/haskell-proj.git && cd haskell-proj
 make dev    # Postgres + migrations + API on :8080 + frontend on :5173
-make test   # backend tests
+make test   # backend tests (frontend: cd frontend && npm test)
 make check  # everything CI runs
 make import file=private/rbc-export.csv   # import a real RBC CSV export
 make post                                 # turn imported rows into journal entries
@@ -49,8 +49,10 @@ scripts/reckon.sh split-row 42 expense:food equal alex sam   # share a dinner; `
 scripts/reckon.sh import-screenshots 1234 private/screenshots/*.png   # read app screenshots with Claude (needs ANTHROPIC_API_KEY)
 ```
 
-Open <http://localhost:5173>. The first build compiles all Haskell
-dependencies and takes a while.
+Open <http://localhost:5173> for the web UI (accounts, transactions, spending,
+receivables, a review queue, and CSV and screenshot import). The first build
+compiles all Haskell dependencies and takes a while. The API has no login, so
+it listens on `127.0.0.1` only (see [docs/PRIVACY.md](docs/PRIVACY.md)).
 
 The full import → post → reconcile walkthrough is in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#from-import-to-a-reconciled-ledger).

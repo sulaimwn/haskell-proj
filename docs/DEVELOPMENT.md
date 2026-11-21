@@ -101,6 +101,28 @@ Open <http://localhost:5173>. The badge in the top right should read
 **API ok · database ok**. Ctrl-C stops the API and the frontend. Postgres keeps
 running; `make db-down` stops it.
 
+The API listens on `127.0.0.1` only and answers only to the host names
+`localhost`, `127.0.0.1` and `[::1]`, because it has no login (D061). So open
+the app as `localhost` (not by your LAN address, which gets a 403), and don't
+change `RECKON_HOST` / `RECKON_ALLOWED_HOSTS` unless you mean to expose it.
+
+## Using the web UI
+
+The same loop as the command line below, with buttons:
+
+1. **Import** a bank CSV (the file picker), then **Accounts → Post imported rows**.
+2. **Review** lists what posting wouldn't decide. Choose an account for each and press *Post*, or
+   for a possible repayment press *Repayment from NAME*.
+3. **Accounts → Record a statement** enters the statement's closing balance as the bank prints it
+   (money in the account, or owed on a card); the card then shows *Reconciled* or a *Gap* with the
+   reason. Set an **opening balance** from a statement dated before your first imported row.
+4. **Transactions → Change…** moves a posted row to another account or splits it with friends;
+   **Receivables → Add a friend** first. **Spending** shows your share by category.
+5. **Import → Screenshots** reads screenshots of the RBC app (needs `ANTHROPIC_API_KEY`);
+   they appear as provisional rows on **Review** until the bank's CSV confirms them.
+
+Amounts in forms are dollars and cents (`1,234.56`); more than two decimals is refused, not rounded.
+
 **The first build takes 10–20 minutes** because cabal compiles every Haskell
 dependency. After that, builds are incremental and take seconds.
 
@@ -281,6 +303,7 @@ Run `make` with no arguments to see them all.
 |---|---|
 | `make dev` | Start everything (see above) |
 | `make test` | Backend test suite. Recreates and migrates `reckon_test` first (the journal is append-only, so tests can't clean up) |
+| `cd frontend && npm test` | Frontend tests (Vitest). Also run by `make check` and CI. `npm run lint`, `npm run typecheck` and `npm run build` are the other checks |
 | `make check` | Everything CI runs. **Run before pushing.** |
 | `make codegen` | Regenerate `frontend/src/api/generated.ts` after changing API types |
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |
@@ -360,8 +383,10 @@ Defined in `.env` (copied from `.env.example`). The scripts export them.
 | `DATABASE_URL` | backend | `postgres://reckon:reckon@localhost:5433/reckon?sslmode=disable` |
 | `TEST_DATABASE_URL` | backend tests | same server, database `reckon_test` |
 | `RECKON_PORT` | backend, Vite proxy | `8080` |
+| `RECKON_HOST` | backend: the address it listens on. Not for exposing the API: it has no login | `127.0.0.1` |
+| `RECKON_ALLOWED_HOSTS` | backend: comma-separated `Host` names it answers to (403 otherwise) | `localhost,127.0.0.1,[::1]` |
 | `RECKON_DB_PORT` | docker-compose | `5433` |
-| `ANTHROPIC_API_KEY` | `import-screenshots` and `eval-screenshots` (the backend only; never the frontend, never logged) | unset (screenshots can't be read without it) |
+| `ANTHROPIC_API_KEY` | `import-screenshots`, `eval-screenshots` and the server's screenshot upload (the backend only; never the frontend, never logged) | unset (screenshots can't be read without it) |
 | `ANTHROPIC_MODEL` | the same | `claude-opus-5-5` |
 | `ANTHROPIC_BASE_URL` | the same. Only changed to point at a test stub. | `https://api.anthropic.com` |
 
@@ -389,6 +414,8 @@ merged; add a new one.
 | `permission denied ... docker.sock` | Add yourself to the `docker` group (step 4) and log in again. |
 | Port 5433, 8080 or 5173 already in use | Change `RECKON_DB_PORT` / `RECKON_PORT` in `.env` (and the matching URLs). Vite's port is fixed at 5173 in `frontend/vite.config.ts`. |
 | Badge says **API unreachable** | The backend isn't running or crashed. Check the `make dev` output. |
+| The page loads but everything says "This host name isn't allowed" (403) | You opened it by an address other than `localhost` / `127.0.0.1` / `[::1]`. Use `http://localhost:5173`, or add the name to `RECKON_ALLOWED_HOSTS` (and read D061 first). |
+| Uploading screenshots says reading isn't configured (503) | The server has no `ANTHROPIC_API_KEY`. Put it in `.env` and restart `make dev`: it's read once, at startup. |
 | Badge says **database unreachable** | Postgres is down: `make db-up`. |
 | Tests fail with `TEST_DATABASE_URL is not set` | Run them with `make test`, not bare `cabal test`. |
 | `make post` leaves rows "for review" | By design: it won't guess which rows go together. Settle each with `scripts/reckon.sh post-row ROW_ID ACCOUNT` (see "From import to a reconciled ledger"). |

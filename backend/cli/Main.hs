@@ -21,15 +21,15 @@ import Reckon.Database.Schema (BankAccount)
 import Reckon.Import (importRbcCsv, renderImportError, renderImportOutcome)
 import Reckon.Import.RbcCsv (parseCents)
 import Reckon.Money (Cents, renderCents)
-import Reckon.People (PersonError (..), addPerson, renderOwed, whoOwesWhat)
-import Reckon.Posting (ManualPostingError (..), RuleError (..), addCategorizationRule, postPendingRows, postRowManually, recategorizeRow, renderPostingSummary)
-import Reckon.Posting.Split (SplitError (..))
+import Reckon.Messages (describeCheckpointError, describeOpeningBalanceError, describePersonError, describePostingError, describeReleaseError, describeRuleError, describeSplitRowError)
+import Reckon.People (addPerson, renderOwed, whoOwesWhat)
+import Reckon.Posting (addCategorizationRule, postPendingRows, postRowManually, recategorizeRow, renderPostingSummary)
 import Reckon.Reconcile
 import Reckon.Report (renderSpending, spendingByAccount)
 import Reckon.Screenshot.Eval (evaluateScreenshots)
 import Reckon.Screenshot.Import (ScreenshotFile (..), importScreenshots, renderImportScreenshotsError, renderImportScreenshotsOutcome)
-import Reckon.Screenshot.Store (ReleaseError (..), openProvisionalRows, releaseProvisional, renderOpenProvisional)
-import Reckon.Sharing (SplitRowError (..), SplitSpec (..), splitRow)
+import Reckon.Screenshot.Store (openProvisionalRows, releaseProvisional, renderOpenProvisional)
+import Reckon.Sharing (SplitSpec (..), splitRow)
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
 import System.FilePath (takeFileName)
@@ -74,14 +74,14 @@ main = do
         result <- postRowManually (toSqlKey rowNumber) (Text.pack accountName)
         pure $ case result of
           Right () -> Right ("Posted row #" <> Text.pack rowIdText <> " against " <> Text.pack accountName <> ".")
-          Left problem -> Left (describePostingError rowIdText problem)
+          Left problem -> Left (describePostingError (Text.pack rowIdText) problem)
     ["recategorize", rowIdText, accountName] -> case readMaybe rowIdText of
       Nothing -> die ("ROW_ID must be the number shown by make post, got " <> show rowIdText)
       Just rowNumber -> withDatabase $ \pool -> runOrDie pool $ do
         result <- recategorizeRow (toSqlKey rowNumber) (Text.pack accountName)
         pure $ case result of
           Right () -> Right ("Row #" <> Text.pack rowIdText <> " is now posted against " <> Text.pack accountName <> ".")
-          Left problem -> Left (describePostingError rowIdText problem)
+          Left problem -> Left (describePostingError (Text.pack rowIdText) problem)
     ["add-person", name, matchText] -> withDatabase $ \pool -> runOrDie pool $ do
       result <- addPerson (Text.pack name) (Text.pack matchText)
       pure $ case result of
@@ -90,10 +90,7 @@ main = do
             ( "Added " <> Text.pack name <> ". Money in whose description contains \"" <> Text.toUpper (Text.pack matchText)
                 <> "\" will be offered as their repayment (make post), and their share of split payments goes to receivable:" <> Text.pack name <> "."
             )
-        Left (InvalidPersonName invalid) -> Left ("\"" <> invalid <> "\" isn't a valid name: use lower-case letters, digits and hyphens, e.g. alex.")
-        Left EmptyMatchText -> Left "MATCH_TEXT is empty."
-        Left (PersonAlreadyExists existing) -> Left (existing <> " has already been added.")
-        Left (MatchTextAlreadyUsed existing) -> Left ("Someone else already matches \"" <> existing <> "\".")
+        Left problem -> Left (describePersonError problem)
     ("split-row" : rowIdText : accountName : shareArguments) -> case (readMaybe rowIdText, shareArguments) of
       (Nothing, _) -> die ("ROW_ID must be the number shown by make post, got " <> show rowIdText)
       (_, []) -> die "Say who to split with: `equal NAME...` or `NAME=AMOUNT...`."
@@ -124,8 +121,7 @@ main = do
         result <- releaseProvisional (toSqlKey rowNumber)
         pure $ case result of
           Right () -> Right ("Released #" <> Text.pack rowIdText <> ": its provisional entry is reversed.")
-          Left NoSuchScreenshotRow -> Left ("There's no screenshot row #" <> Text.pack rowIdText <> ".")
-          Left AlreadyResolved -> Left ("#" <> Text.pack rowIdText <> " has already been confirmed, replaced or released.")
+          Left problem -> Left (describeReleaseError (Text.pack rowIdText) problem)
     ["eval-screenshots", directory] -> do
       anthropic <- loadAnthropicConfig >>= either (die . Text.unpack) pure
       extract <- anthropicExtractor anthropic
@@ -150,20 +146,14 @@ main = do
         result <- recordOpeningBalance account date amount
         pure $ case result of
           Right _ -> Right ("Recorded an opening balance of " <> renderCents amount <> " at the end of " <> showText date <> ".")
-          Left (OpeningBalanceNotBeforeFirstTransaction firstDate) ->
-            Left
-              ( "The opening balance must be from before your first imported transaction ("
-                  <> showText firstDate
-                  <> "), or that transaction would be counted twice. Use a statement balance from an earlier date."
-              )
-          Left ZeroOpeningBalance -> Left "A zero opening balance doesn't need recording."
+          Left problem -> Left (describeOpeningBalanceError problem)
     ["checkpoint", last4Text, dateText, amountText] -> do
       (last4, date, amount) <- parseAccountDateAmount last4Text dateText amountText
       withDatabase $ \pool -> runOrDie pool $ withBankAccount last4 $ \account -> do
         result <- recordCheckpoint account date amount
         case result of
-          Left (CheckpointAlreadyRecorded existingDate) ->
-            pure (Left ("A checkpoint for " <> showText existingDate <> " is already recorded. Run: scripts/reckon.sh reconcile"))
+          Left problem ->
+            pure (Left (describeCheckpointError problem <> " Run: scripts/reckon.sh reconcile"))
           Right _ -> Right . renderReconciliationReport <$> reconcileAccount account date amount
     ["reconcile"] -> withDatabase $ \pool -> do
       reports <- runSqlPool reconcileAllCheckpoints pool
@@ -209,10 +199,7 @@ addRule ruleText accountName priority pool = runOrDie pool $ do
         ( "Added: descriptions containing \"" <> Text.toUpper (Text.pack ruleText) <> "\" go to " <> Text.pack accountName
             <> ". It applies to rows posted from now on."
         )
-    Left EmptyRuleText -> Left "The rule text is empty."
-    Left (RuleAlreadyExists existing) -> Left ("A rule for \"" <> existing <> "\" already exists.")
-    Left (UnknownAccountPrefix name) ->
-      Left ("\"" <> name <> "\" must start with expense:, income:, asset:, liability:, receivable: or equity:")
+    Left problem -> Left (describeRuleError problem)
 
 parseAccountDateAmount :: String -> String -> String -> IO (Last4, Day, Cents)
 parseAccountDateAmount last4Text dateText amountText = do
@@ -251,28 +238,4 @@ shareRow rowIdText rowNumber accountName spec pool = runOrDie pool $ do
   result <- splitRow (toSqlKey rowNumber) (Text.pack accountName) spec
   pure $ case result of
     Right () -> Right ("Row #" <> Text.pack rowIdText <> " is split. See who owes what with: scripts/reckon.sh owed")
-    Left (CouldNotPost problem) -> Left (describePostingError rowIdText problem)
-    Left (UnknownPerson name) ->
-      Left ("There's no one called " <> name <> ". Add them with: scripts/reckon.sh add-person " <> name <> " \"THEIR NAME ON E-TRANSFERS\"")
-    Left (InvalidSplit problem) -> Left (describeSplitError problem)
-
-describeSplitError :: SplitError -> Text
-describeSplitError = \case
-  OnlyMoneyOutCanBeSplit -> "Only a payment out of an account can be split, and this row is money coming in."
-  NoOneToSplitWith -> "Name at least one person to split with."
-  NonPositiveShare name -> name <> "'s share must be more than zero."
-  PersonListedTwice name -> name <> " is listed twice."
-  SharesExceedAmount shares amount ->
-    "The shares add up to " <> renderCents shares <> ", which is more than the payment of " <> renderCents amount <> "."
-
-describePostingError :: String -> ManualPostingError -> Text
-describePostingError rowIdText = \case
-  RowNotFound -> "There's no imported row #" <> rowText <> "."
-  RowAlreadyPosted -> "Row #" <> rowText <> " is already posted. To move it to another account: scripts/reckon.sh recategorize " <> rowText <> " ACCOUNT"
-  ZeroAmountRow -> "A zero-amount row can't be posted."
-  UnknownAccount name -> "\"" <> name <> "\" must start with expense:, income:, asset:, liability:, receivable: or equity:"
-  RowIsPartOfPair ->
-    "Row #" <> rowText <> " is one leg of a transfer or a cancelled pair. Moving one leg on its own would leave asset:clearing out of balance."
-  EntryRejected entryError -> "The entry was rejected: " <> showText entryError
-  where
-    rowText = Text.pack rowIdText
+    Left problem -> Left (describeSplitRowError (Text.pack rowIdText) problem)

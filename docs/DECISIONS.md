@@ -705,3 +705,161 @@ Phase 3 one again.
   guard, windows, "a word in common") and the default model are all
   untested against reality. `eval-screenshots` on a handful of real
   screenshots is the first thing to run.
+
+### D061: Keeping a login-less API private on one machine (Phase 6, accepted)
+
+**Context:** From Phase 6 the server exposes real financial data (and can
+change the ledger) over HTTP. There is no login: reckon is a single-user tool
+on its owner's machine. "No login" is only safe if nothing but the owner's
+browser can reach the API, and a web page you merely *visit* can try to.
+
+**Decision:** three independent layers, all in `Reckon.Security` /
+`Reckon.Config`:
+1. **Listen on loopback only.** `RECKON_HOST` defaults to `127.0.0.1`. Other
+   machines on the network can't connect at all.
+2. **Host-header allowlist** (`hostGuard`). A request whose `Host` isn't in
+   `RECKON_ALLOWED_HOSTS` (default `localhost`, `127.0.0.1`, `[::1]`) gets 403.
+   This is the defence against *DNS rebinding*: a hostile page whose domain
+   first resolves to its own server and then to 127.0.0.1 would otherwise have
+   the browser treat our API as same-origin and let it read everything. Its
+   requests carry `Host: evil.example.com`, which we refuse.
+3. **Writes must be `application/json`** (`jsonOnlyWrites`). A cross-site form
+   or `text/plain` POST is a "simple" request that browsers send without
+   asking permission; a JSON one needs a CORS preflight, which we never
+   answer. Servant already returns 415 for routes that declare a JSON body;
+   the middleware also covers a future write route that declares none, and
+   has its own test for that reason (a mutation check showed Servant's check
+   was hiding the middleware's absence).
+
+The Vite dev proxy keeps `Host: localhost:5173`, so development needs no
+configuration; opening the dev server by LAN address is refused until the
+name is added to `RECKON_ALLOWED_HOSTS` (and `RECKON_HOST` is widened).
+
+**Alternatives considered:** a shared-secret token header (stronger against a
+malicious local process, but then the frontend must hold the secret, which
+needs a login flow: too much for a one-user local tool, and a local process
+can already read the database); a CORS allowlist only (doesn't stop rebinding
+reads, since a rebound page is same-origin); a Unix socket (browsers can't
+speak to one without a proxy); no protection ("it's localhost"), which is
+exactly the mistake DNS rebinding exploits.
+
+**Not defended:** another program running as you on this machine. It could
+read `.env` and the database directly anyway.
+
+### D062: The HTTP API's shape: views, actions, refusals, uploads (Phase 6, accepted)
+
+**Decision:**
+- **Reads** are `GET` endpoints that answer one screen's question each
+  (`/api/accounts`, `/api/accounts/:last4/transactions`, `/api/spending`,
+  `/api/receivables`, `/api/review`, `/api/ledger-accounts`). Their queries
+  live in `Reckon.Views` and return the API's own types, so the frontend never
+  joins or re-derives anything; money crosses the wire as integer cents.
+- **Actions** are `POST`s that run exactly the code the CLI runs and answer
+  `ActionResult {message, details}`, the same sentences the CLI prints
+  (`Reckon.Messages` holds the wording, shared by both). So the CLI and the UI
+  can't drift into describing a refusal differently.
+- **Refusals** are `{ "problem": "..." }` with a status that says whose fault
+  it was: 400 malformed input (bad date, bad base64), 404 no such row/account,
+  422 the ledger refused (unbalanced, ambiguous, a transfer leg on its own...),
+  502 the model's reply couldn't be used, 503 screenshot reading not
+  configured. The frontend shows `problem` verbatim.
+- **Uploads are JSON with base64 content**, not multipart. Files are small
+  (a CSV, a few screenshots), base64 costs a third more bytes on the wire,
+  and in exchange there is one body format everywhere, no multipart
+  dependency, and `jsonOnlyWrites` (D061) can refuse everything else.
+  Multipart forms are exactly what a cross-site `<form>` can send.
+- **`asOf`** (optional date) on balance endpoints. Defaults to today; tests
+  pass the end of their scenario's year so they are independent of the clock.
+- **Screenshot reading is decided once at startup:** with
+  `ANTHROPIC_API_KEY` set the server holds an `Extractor`
+  (`ReadingAvailable`), otherwise `ReadingUnavailable` and the endpoint
+  answers 503 with how to fix it. The key never leaves the process.
+
+**Alternatives considered:** one generic `/api/command` endpoint (loses typed
+requests and the generated TypeScript); exposing the ledger tables and letting
+the frontend assemble screens (moves reconciliation rules into JavaScript,
+where they'd be wrong); multipart uploads.
+
+### D063: Transactions are what the ledger says *now* (Phase 6, accepted)
+
+**Decision:** the transactions list shows the entries on a bank account as
+the bank would show them, newest first, **omitting reversed entries and the
+reversals themselves**. A corrected posting appears once, as the corrected
+entry. The journal still holds the whole history (append-only); the page is
+a current view, not an audit log. Amounts are the account's raw signed line:
+money in is positive and money out negative for chequing, savings and cards
+alike, which keeps a column scannable without per-kind rules. (Account
+*balances* are the opposite convention on purpose: they use the sign the
+bank prints, e.g. money owed on a card, matching the statement they are
+reconciled against.)
+
+Only a posted **CSV** row offers "recategorize" and "split": a screenshot row
+is provisional and settles itself when its CSV row arrives (D058).
+
+### D064: The frontend's structure (Phase 6, accepted)
+
+**Decision:**
+- **No UI framework and no router library.** Six pages, one stylesheet using
+  CSS variables (light and dark follow the system), a ~30-line hash router
+  (`lib/route.ts`) whose `Route` is a union type, so a page can't be forgotten
+  (`satisfies never` in the switch). The fragment keeps the server out of
+  routing and survives a refresh.
+- **TanStack Query for server state; every successful action invalidates all
+  queries** (`useAction`). Any action can change any page (a post moves a
+  balance, a review item and a checkpoint at once), and with six small pages
+  refetching everything is simpler than, and never staler than, hand-picking
+  keys.
+- **Types come only from `generated.ts`**; `strict` TypeScript is now on.
+- **Money is integer cents end to end.** `formatCents` and
+  `parseAmountToCents` are the only conversions, tested exhaustively over a
+  range and for the inputs that would silently lose cents ("1.234" is
+  refused, not rounded). The one division, a spending bar's width, is
+  isolated in `barPercent` and is never displayed or summed.
+- **Tests:** Vitest for pure logic, and Testing Library with a fake `fetch`
+  (`src/testing.tsx`) for the pages, which assert on what the user sees and on
+  the exact JSON sent. `npm test` runs in CI and `make check`.
+
+**Alternatives considered:** React Router (a dependency for six pages);
+Redux/Zustand (server state is TanStack Query's job and there is little
+client state); a component library (the point of the project is the
+ledger, and the pages are forms and tables); MSW for network mocking (a
+dependency where a 25-line fake `fetch` is clearer).
+
+### D065: Phase 6 scope as built, and what is deferred (Phase 6, accepted, scope change)
+
+**Built:** accounts (balances, unposted counts, latest reconciliation with its
+explanation, record a statement or opening balance, post imported rows),
+transactions (account tabs, date and text filters, recategorize, split with
+friends), spending by month with bars, receivables and add a friend, a review
+queue (rows needing a decision, settle or apply a repayment to a friend,
+release a provisional row, import warnings, add a rule), and import of CSVs
+and screenshots.
+
+**Deferred (known gaps):**
+- **Charts beyond bars.** A charting library isn't justified yet.
+- **Paging past the newest 200 transactions;** narrow the dates instead.
+- **Listing or editing people and rules.** You can add them; removing or
+  changing one is a CLI/SQL job for now. The split form takes names as
+  text, because there is no endpoint that lists people.
+- **Exact-amount splits in the UI.** The API supports them (`shares`); the
+  form offers equal splits only.
+- **Untested against a real browser session with real data.** Verified with
+  fixture data and headless Chromium screenshots only.
+- **Authentication.** By design (D061).
+
+### D066: Request logging never includes request bodies (Phase 6, accepted)
+
+**Context:** the server used `logStdoutDev`, whose detailed format prints any
+request body under 2 KB. Phase 6 added endpoints whose bodies are financial
+data (a CSV upload, a balance), so a small file would have been printed to the
+terminal and into whatever captures it.
+
+**Decision:** `logStdout` (Apache format: client, method, path with query,
+status, user agent). No bodies, no headers. Verified by sending a body with a
+marker string and finding it absent from the log. Search text (`?q=`) is in
+the path, so it can appear in the log on the owner's own machine; it never
+leaves it.
+
+**Alternative:** keep the dev logger in development only. Rejected: "only in
+development" is also where the real data is, since there is no other
+environment yet.

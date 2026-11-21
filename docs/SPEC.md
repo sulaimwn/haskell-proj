@@ -203,7 +203,7 @@ as their repayment (applied with `post-row`), never applied automatically
 (D050, the owner may override); `recategorize` fixes an already-posted row;
 `owed` and `spending` are CLI reports. Matching is by stored text rather than
 by parsing e-Transfer descriptions (D053). The frontend views for receivables
-and spending are Phase 6.
+and spending are Phase 6 (built: D065).
 
 ### Phase 5: Screenshot ingestion with Claude
 
@@ -211,8 +211,8 @@ and spending are Phase 6.
 model chosen by `ANTHROPIC_MODEL`; the model only transcribes and Haskell does the arithmetic and
 refuses anything off (D055); overlapping screenshots are joined by their overlap (D056); screenshot
 rows live in their own tables, not `raw_bank_rows`, are posted provisionally, and resolve by
-reversal (D058). The HTTP upload endpoint and upload page are Phase 6: for now it's `import-screenshots`
-on the command line, naming the account by its last 4 digits. The evaluation script is
+reversal (D058). The upload endpoint and page arrived in Phase 6 (D062); the command line
+(`import-screenshots`) still works and names the account by its last 4 digits. The evaluation script is
 `eval-screenshots`.
 
 Also includes, moved from Phase 3 (D045): pending vs posted (a tip changes
@@ -249,6 +249,17 @@ reversal when the posted row arrives.
 Accounts overview (balances, reconciliation status), import page, review
 queue, transaction list (filter, split with friends), spending by category
 per month (excluding transfers and friends' shares), receivables.
+
+**As built** (DECISIONS D061-D065): everything the command line does is an
+HTTP endpoint with generated TypeScript types and a page. Reads answer one
+screen's question each (`Reckon.Views`); actions run the CLI's code and return
+its wording (`Reckon.Messages`); refusals are `{problem}` with a status that
+says whose fault it was (D062). Because the API has no login, it listens on
+loopback only, refuses unknown `Host` headers (DNS rebinding) and refuses
+non-JSON writes (D061). Uploads are base64 JSON, not multipart. The frontend
+is React with a hash router, TanStack Query and no UI library (D064).
+Deferred: paging past 200 rows, listing/editing people and rules, exact-amount
+splits in the form, authentication (D065).
 
 ### Phase 7: Scheduled jobs and rules
 

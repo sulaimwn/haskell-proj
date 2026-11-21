@@ -17,11 +17,13 @@ Three processes in development:
 | Process | Code | Role |
 |---|---|---|
 | Postgres | `docker-compose.yml`, `db/` | The system of record. The schema is plain SQL migrations applied by dbmate. |
-| `reckon-server` | `backend/` | JSON API. All domain logic, all database access, and (Phase 5) all calls to the Claude API. |
+| `reckon-server` | `backend/` | JSON API. All domain logic, all database access, and all calls to the Claude API. Listens on `127.0.0.1` only. |
 | Vite | `frontend/` | Serves the React app and proxies `/api` to the backend, so the browser sees one origin. |
 
 The frontend has no business logic beyond display. Anything that affects
-money happens in Haskell and is guarded by the database.
+money happens in Haskell and is guarded by the database. Its one piece of
+arithmetic on money is the width of a spending bar (`lib/bars.ts`), which is
+never shown or summed.
 
 ## Repository layout
 
@@ -37,7 +39,10 @@ backend/
     Api/Types.hs          every JSON type on the wire + its TypeScript declaration
     Api/JsonOptions.hs    shared aeson encoding options
     Api/TypeScript.hs     renders Api.Types as a TypeScript module
-    Server.hs             handlers and the WAI Application
+    Server.hs             handlers, the status mapping for refusals, and the WAI Application (guards + Servant)
+    Security.hs           WAI middleware: Host allowlist (DNS rebinding), JSON-only writes
+    Views.hs              read-only queries behind the screens, in the API's own types
+    Messages.hs           the wording of every refusal, shared by the CLI and the API
     Money.hs              Cents: exact integer money
     Database/Schema.hs    persistent's description of the SQL tables
     Ledger/AccountType.hs asset | liability | income | expense | equity; display sign
@@ -70,8 +75,11 @@ backend/
   test/                   hspec test suite
 frontend/
   src/api/generated.ts    GENERATED from backend Api/Types.hs. Do not edit.
-  src/api/client.ts       typed fetch wrappers, one per endpoint
-  src/components/         React components
+  src/api/client.ts       typed fetch wrappers, one per endpoint (+ ApiError, file -> base64)
+  src/pages/              one component per screen: Accounts, Transactions, Spending, Receivables, Review, Import
+  src/components/         shared pieces: Money, Notice, QueryState, forms, HealthBadge
+  src/lib/                pure logic with tests: money.ts, route.ts, months.ts, bars.ts, plural.ts; hooks: useAction, useHashRoute
+  src/testing.tsx         fake `fetch` and a render helper for component tests
 db/
   migrations/             dbmate SQL migrations (source of truth for the schema)
   schema.sql              full current schema, rewritten by `make migrate` (appears with the first migration)
@@ -82,11 +90,48 @@ scripts/                  the bash behind every `make` target (reckon.sh runs an
 docs/                     you are here
 ```
 
+## The HTTP API and the screens (Phase 6)
+
+Everything the CLI does is an endpoint (declared in `Reckon.Api`, handled in
+`Reckon.Server`), and every JSON type is in `Reckon.Api.Types` and generated
+into TypeScript.
+
+| Endpoint | Answers / does | Backed by |
+|---|---|---|
+| `GET /api/accounts[?asOf=]` | each account: balance (the bank's sign), unposted rows, open provisional rows, latest checkpoint and its explanation | `Views.accountSummaries`, `Reconcile.reconcileAccount` |
+| `GET /api/accounts/:last4/transactions` | entries on the account, newest first, filtered by `from`, `to`, `q`, `limit`; reversed entries and reversals are hidden (D063) | `Views.transactionsFor` |
+| `GET /api/spending`, `/api/receivables`, `/api/ledger-accounts` | spending per expense account per month; who owes what; account names for the pickers | `Views.*`, `People.whoOwesWhat` |
+| `GET /api/review` | rows left for review (with the reason and which friends a payment might be from), open provisional rows, import warnings | `Posting.reviewItems` (a dry run of posting), `Screenshot.Store`, `import_review_items` |
+| `POST /api/imports/csv`, `/api/imports/screenshots` | import; files are base64 in JSON (D062) | `Import`, `Screenshot.Import` |
+| `POST /api/post` | post every unposted row | `Posting.postPendingRows` |
+| `POST /api/rows/:id/{settle,recategorize,split}`, `/api/provisional/:id/release` | the CLI's `post-row`, `recategorize`, `split-row`, `release-provisional` | `Posting`, `Sharing`, `Screenshot.Store` |
+| `POST /api/people`, `/api/rules`, `/api/accounts/:last4/{opening-balance,checkpoints}` | add a friend or rule; record balances (a checkpoint's result carries the reconciliation report) | `People`, `Posting`, `Reconcile` |
+
+Reads are plain queries. Actions return `{message, details}`, the same
+sentences the CLI prints (`Reckon.Messages`). A refusal is `{problem}`
+with 400 (malformed input), 404 (no such row or account), 422 (the ledger
+refused), 502 (the model's reply was unusable) or 503 (screenshot reading
+isn't configured, i.e. no `ANTHROPIC_API_KEY`).
+
+**Keeping a login-less API private (D061).** `Server.application` is
+`hostGuard (jsonOnlyWrites (serve ...))`, and the server binds `RECKON_HOST`
+(default `127.0.0.1`). So: other machines can't connect; a page on another
+site can't use DNS rebinding (its requests carry another `Host`, answered 403);
+and a cross-site form can't change anything (writes must be `application/json`,
+answered 415, and a JSON write needs a CORS preflight that is never granted).
+
+**The frontend** is six pages under a hash router (`#/accounts`,
+`#/transactions/1234`, ...). Server data is cached by TanStack Query and every
+successful action invalidates all of it (`useAction`), since any action can
+change any page. A form turns what's typed into integer cents
+(`parseAmountToCents` refuses "1.234" rather than rounding), the page sends
+it, and the server's own sentences are shown verbatim in a `Notice`.
+
 ## Request flow (`GET /api/health`)
 
 1. The browser requests `/api/health` from Vite, which proxies it to `:8080`.
 2. Warp (the HTTP server) hands the request to the WAI `Application` built in
-   `Reckon.Server.application`.
+   `Reckon.Server.application`, which first runs the Host and JSON guards.
 3. Servant matches the path against the `Api` type and calls the `health`
    handler, which runs in `AppM` (it can read `AppEnv`).
 4. The handler borrows a connection from the pool and runs `SELECT 1` with a
@@ -443,6 +488,8 @@ This section grows every phase. Each invariant lists how it is enforced.
 | A provisional row is resolved at most once, and a bank row confirms at most one provisional row | `provisional_resolutions` primary key + `UNIQUE (raw_bank_row_id)` + CHECK per kind; raw-SQL test | Phase 5 |
 | A row is matched to a bank row only when unambiguous | `planMatches`: each is the other's only candidate, with identical rows matched as a group; property: matches are one to one | Phase 5 |
 | Screenshot evidence is never modified | append-only triggers + raw-SQL tests | Phase 5 |
+| Only the owner's own browser can read or change the ledger through the API | loopback bind (`RECKON_HOST`), `hostGuard` (403 for any other `Host`), `jsonOnlyWrites` (415 for anything but JSON); tests over a real Warp socket and on the middleware alone; mutation checks | Phase 6 |
+| The UI never shows or sends a money amount that isn't an exact number of cents | integer cents on the wire; `formatCents` / `parseAmountToCents` (refuses more than two decimals), tested over 20,000 values and the refusals; a mutation check that parsing "1.234" fails tests | Phase 6 |
 | Ledger balance = statement balance at each checkpoint, or the gap is explained | `make reconcile` / `checkpoint`: `explainReconciliation` names unposted rows, missing opening balance, duplicates, or uncovered days; end-to-end test | Phase 3 |
 
 ## CI
@@ -454,7 +501,7 @@ This section grows every phase. Each invariant lists how it is enforced.
 |---|---|
 | Privacy guard and shell scripts | `check-private-data.sh --all`, shellcheck |
 | Backend | cabal build with `-Werror` (dependency store cached by freeze-file hash), migrate a Postgres 17 service container, `cabal test`, `codegen.sh --check` |
-| Frontend | `npm ci`, oxlint, `tsc -b`, `vite build` |
+| Frontend | `npm ci`, oxlint, `tsc -b` (strict), `vitest run`, `vite build` |
 
 ## Environments
 

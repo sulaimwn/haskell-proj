@@ -28,6 +28,6 @@ log "Generated TypeScript is up to date"
 scripts/codegen.sh --check
 
 log "Frontend: lint, typecheck, build"
-(cd frontend && npm run lint && npm run typecheck && npm run build)
+(cd frontend && npm run lint && npm run typecheck && npm test && npm run build)
 
 log "All checks passed"
