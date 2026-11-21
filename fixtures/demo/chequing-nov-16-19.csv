@@ -1,0 +1,4 @@
+"Account Type","Account Number","Transaction Date","Cheque Number","Description 1","Description 2","CAD$","USD$"
+Chequing,00000-0002468,11/17/2026,,"Interac purchase","QUIBBLE BISTRO",-48.00,
+Chequing,00000-0002468,11/18/2026,,"Interac purchase","ZUMBO GROCERY",-37.20,
+Chequing,00000-0002468,11/19/2026,,"Interac purchase","SNORKEL GAS STATION",-43.20,

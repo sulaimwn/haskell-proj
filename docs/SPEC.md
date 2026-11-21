@@ -279,6 +279,13 @@ type, and applied to the past only on request. The job queue and recurring check
 
 ### Phase 8: Demo and README
 
+**As built (DECISIONS D074):** `make demo` runs the app on a fake three-month dataset (`fixtures/demo/`) in its own
+database; the seed uses the real commands and a local stand-in for the Anthropic API, and asserts the outcomes it
+advertises (`scripts/demo.sh --check`, part of `make check`). It covers every case below except **a USD purchase and
+refund**, which reckon deliberately doesn't support (CAD-only, D023: a USD row is rejected with a line number). The
+README has the architecture, the invariants and how each is enforced, the dedupe and screenshot-alignment approaches, an
+honest "extraction accuracy: not measured yet" (nothing has run against the real API), and the known limitations.
+
 A seed script with a fully fake dataset covering every hard case: duplicate
 same-day coffees, overlapping imports, a transfer, a pending-to-posted tip
 change, a split dinner and repayment, a USD purchase and refund, a cancelled

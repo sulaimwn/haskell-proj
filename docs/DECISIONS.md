@@ -1066,3 +1066,39 @@ clean build does. The first `make check` after this compiles the project twice
 
 **Alternative:** `-fforce-recomp` on every check (always correct, always minutes
 slower).
+
+### D074: The demo runs in its own database, and its "API" is a local stand-in (Phase 8, accepted)
+
+**Context:** a reader should be able to run the whole system, with every hard case
+in it, without real data and without an API key; and fake data must never end up in
+the database that holds real data.
+
+**Decision:**
+- **`make demo` uses a separate database, `reckon_demo`** (same Postgres container).
+  `scripts/demo.sh` creates it, migrates it, seeds it the first time, and starts the
+  usual stack against it (`RECKON_DEMO=1` makes `load_env` point `DATABASE_URL` there).
+  `--reset` drops and refills it. The development database is never touched, and
+  `scripts/seed-demo.sh` **refuses to run against any other database name**.
+- **The seed uses the real commands** (import, rules, people, post, opening balances,
+  checkpoints, screenshots, release, due dates): it is an end-to-end run of the CLI, so
+  a regression in any of them breaks the demo.
+- **Screenshots go through a stand-in for the API.** `scripts/stub-anthropic.mjs` (about
+  40 lines of Node, no dependencies) serves the hand-written replies in `fixtures/demo/`
+  in the Messages API's shape. reckon's real client, validation, alignment and import
+  code run against it, with a dummy key; the "screenshots" are 8-byte PNG headers that the
+  stand-in ignores. Nothing talks to the real API and nothing real is sent anywhere.
+- **Statement balances are computed from the CSVs** (opening plus rows up to the date),
+  never from the ledger, so a reconciled statement in the demo is evidence and not a tautology.
+- **Every fake merchant has its own invented name.** An early draft ended every merchant in
+  "EXAMPLE"; matching a pending hold to the bank's row accepts one word in common (D057),
+  so a hold at "HOTEL EXAMPLE" wrongly matched an unrelated bill on that one word.
+  Real merchants don't share a word, so the fixture was unrealistic, and the matcher's
+  one-word rule remains a heuristic to watch on real data (docs/STATUS.md).
+- **Not in the demo: a USD purchase and refund.** reckon is CAD-only (D023), and a USD row is
+  rejected with a line number (`fixtures/rbc/malformed.csv`). A real foreign-currency design
+  is a known gap, not something to fake.
+
+**Alternatives considered:** seeding the development database (risks mixing fake and real
+data); a SQL dump as the demo (bypasses every code path the demo is meant to show);
+committing screenshots (the privacy hook forbids images outside a few folders, and fake
+ones would still imply the model's reading is verified).

@@ -29,6 +29,7 @@ This grows with every phase. Every new module gets a section.
 - [Scheduled jobs and reminders (Phase 7)](#scheduled-jobs-and-reminders-phase-7)
 - [The HTTP API and the screens (Phase 6)](#the-http-api-and-the-screens-phase-6)
 - [The frontend (Phase 6)](#the-frontend-phase-6)
+- [The demo (Phase 8)](#the-demo-phase-8)
 - [Tests](#tests)
 - [Glossary](#glossary)
 
@@ -1340,6 +1341,30 @@ still build in a year.
 A: See `Reckon.Security`. In short: writes must be `application/json`, which a cross-site form
 can't send without a CORS preflight that is never answered; the Host header must be one of ours,
 which stops DNS rebinding; and the server only listens on loopback.
+
+---
+
+## The demo (Phase 8)
+
+Design: D074. Not Haskell, but part of the project's guarantees: a demo that can rot is worse than none.
+
+- **`scripts/stub-anthropic.mjs`** is ~40 lines of Node with no dependencies: an HTTP server on a random
+  loopback port that answers `POST /v1/messages` with the next fake reply, wrapped in the Messages API's
+  response shape (`content: [{type: "text", text}]`), and prints `PORT n`. The seed points `ANTHROPIC_BASE_URL`
+  at it (that variable exists for exactly this, and for the Haskell stub-server tests), so **reckon's real
+  `anthropicExtractor`, `parseExtraction`, alignment and import code run**; only the model is replaced.
+- **`scripts/seed-demo.sh`** is the demo as a script: `cli import-rbc-csv ...`, `add-rule ...`, `post`,
+  `checkpoint ...`, `import-screenshots ...`, `release-provisional ...`. Ids it needs (a row to settle, a hold to
+  release) are looked up with `psql` by date and description, never hard-coded. It begins by refusing any database but
+  `reckon_demo`, and ends with `expect` checks (a bash function comparing what it got with what the README says),
+  so a change that breaks an advertised behavior fails `make check`.
+- **The statement balances** in the seed are computed from the CSVs, not the ledger. A reconciled statement is evidence
+  only if the number is independent of the thing it checks.
+
+**Q: Why not just ship a SQL dump?**
+A: A dump would show the end state and bypass every code path the demo exists to demonstrate: import, dedupe,
+posting, matching, reversal. Running the real commands makes the demo an end-to-end test that a person can also
+click through.
 
 ---
 

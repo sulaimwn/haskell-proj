@@ -25,6 +25,12 @@ load_env() {
   # shellcheck source=/dev/null
   source .env
   set +a
+  # `make demo` runs everything against a separate database filled with fake
+  # data (scripts/demo.sh), so the development database is never touched.
+  if [[ "${RECKON_DEMO:-}" == "1" ]]; then
+    DATABASE_URL="postgres://reckon:reckon@localhost:${RECKON_DB_PORT:-5433}/reckon_demo?sslmode=disable"
+    export DATABASE_URL
+  fi
   # docker-compose.yml runs dbmate as this user so files it writes are yours.
   export RECKON_UID RECKON_GID
   RECKON_UID="$(id -u)"

@@ -3,16 +3,17 @@
 **The handoff doc.** If you're picking this project up, read this first,
 then [CLAUDE.md](../CLAUDE.md). Updated in every PR.
 
-_Last updated: 2026-11-21, end of Phase 7._
+_Last updated: 2026-11-21, end of Phase 8 (all phases built)._
 
 ## Where we are
 
-**Phase 7 (a rule language, scheduled jobs and reminders) is complete**, on top of Phase 6's web UI. Nothing
-in the UI or the checks has been used with real data or a real API key yet (see "Unverified" below). Phases 3 to 7 are stacked on one branch and in
+**All eight phases are built.** The last three: Phase 6 (the web UI), Phase 7 (a rule language, scheduled jobs and
+reminders) and Phase 8 (a demo dataset and the write-up in the README). **Nothing has been used with real data or a
+real API key yet** (see "Unverified" below): the demo is the way to see it work. Phases 3 to 7 are stacked on one branch and in
 one PR, because the owner asked for work to continue without waiting for review
 ([PR #4](https://github.com/sulaimwn/haskell-proj/pull/4), one commit per
 phase, so they can be reviewed separately). Nothing has been merged by Claude.
-Phase 8 (the demo dataset and write-up) is next.
+What's left is the owner's: run it on real data, and decide on a login before it goes anywhere else.
 
 | Phase | Status |
 |---|---|
@@ -24,9 +25,14 @@ Phase 8 (the demo dataset and write-up) is next.
 | 5: Screenshot ingestion with Claude | ✅ done, same PR (stacked on 4) |
 | 6: Frontend | ✅ done, same PR (stacked on 5) |
 | 7: Scheduled jobs and rules | ✅ done, same PR (stacked on 6) |
-| 8: Demo and README | ⏭ next |
+| 8: Demo and README | ✅ done, same PR (stacked on 7) |
 
 ## What works today
+
+**The demo (Phase 8).** `make demo` runs everything on invented data in its own database, with no key (D074):
+a reconciled account and one that isn't, a split dinner, holds that post with a tip or lower or never, overlapping
+screenshots, ambiguous transfers. Where each case is: [fixtures/demo/README.md](../fixtures/demo/README.md).
+`make check` loads it and asserts the outcomes it advertises.
 
 **The web UI (Phase 6).** `make dev`, then open http://localhost:5173. Seven pages (the Review page also shows reminders):
 
@@ -240,12 +246,18 @@ Nothing else here has been run on a real RBC export yet either. When the owner d
   MASTERCARD, AMEX, AMERICAN EXPRESS or CREDIT CARD. Real descriptions may
   differ. `make post`'s summary shows what was recognized.
 
-## What's next: Phase 8 (demo and write-up)
+## What's next
 
-From [SPEC.md](SPEC.md#phase-8-demo-and-readme): a demo dataset (fake, in `fixtures/`) that shows
-the whole system working, and a README/write-up that explains the design to someone who has never
-seen it. Before that, the things only the owner can do: run it on **real** data and a real API key
-(see "Unverified"), and decide on a login before anything is deployed (D061).
+Nothing is queued in the spec. The next steps are the owner's, in this order:
+
+1. **Review the PR** (one commit per phase, so they can be read separately).
+2. **Run it on real data**: `make import` on a real RBC export, then `make post`, and compare with a real
+   statement. The list under "Unverified" says what to look for. Share the *kind* of problem, not the data (PRIVACY).
+3. **Try the screenshot path once** with a real key and a few real screenshots, then `eval-screenshots` on a labelled set
+   (the README's "extraction accuracy" is empty until this is done).
+4. **Decide on a login** before the app goes anywhere but a laptop (D061), and on where to host it if at all.
+5. Known gaps worth doing (see "Known issues"): foreign currency (D023), exact-amount splits in the UI, paging,
+   a correct-this-row form for screenshot rows, listing/editing people and rules.
 
 ## Open questions for the owner
 

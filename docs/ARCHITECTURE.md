@@ -91,9 +91,9 @@ db/
   migrations/             dbmate SQL migrations (source of truth for the schema)
   schema.sql              full current schema, rewritten by `make migrate` (appears with the first migration)
   init/                   runs once when the Postgres volume is created (creates reckon_test)
-fixtures/                 FAKE data for tests and the demo (rbc/: fake RBC exports)
+fixtures/                 FAKE data for tests and the demo (rbc/: fake RBC exports; screenshots/: fake model replies; demo/: the `make demo` dataset)
 private/                  REAL data. Gitignored, never committed.
-scripts/                  the bash behind every `make` target (reckon.sh runs any reckon-cli command)
+scripts/                  the bash behind every `make` target (reckon.sh runs any reckon-cli command; demo.sh / seed-demo.sh / stub-anthropic.mjs run the demo)
 docs/                     you are here
 ```
 
@@ -585,6 +585,14 @@ This section grows every phase. Each invariant lists how it is enforced.
 | Privacy guard and shell scripts | `check-private-data.sh --all`, shellcheck |
 | Backend | cabal build with `-Werror` (dependency store cached by freeze-file hash), migrate a Postgres 17 service container, `cabal test`, `codegen.sh --check`. `make check` does the same in `backend/dist-newstyle-werror` so a cached non-`-Werror` build can't hide warnings (D073) |
 | Frontend | `npm ci`, oxlint, `tsc -b` (strict), `vitest run`, `vite build` |
+
+## The demo (Phase 8)
+
+`make demo` runs the same stack against a separate database, `reckon_demo` (D074): `lib.sh`'s `load_env` points
+`DATABASE_URL` there when `RECKON_DEMO=1`. `scripts/seed-demo.sh` drives the real CLI (import, rules, post,
+checkpoints, screenshots, release, due dates), with screenshots read through `scripts/stub-anthropic.mjs`, a local
+stand-in for the Messages API serving fake replies. It refuses to run against any other database and ends by
+asserting what it advertises; `scripts/demo.sh --check` runs it without the app and is part of `make check`.
 
 ## Environments
 

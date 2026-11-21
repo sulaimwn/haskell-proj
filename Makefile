@@ -2,13 +2,19 @@
 # is a thin wrapper so `make help` doubles as the list of things you can do.
 
 .DEFAULT_GOAL := help
-.PHONY: help dev test check codegen import post reconcile owed provisional migrate migration db-up db-down db-psql db-destroy hooks frontend-check
+.PHONY: help dev demo demo-reset test check codegen import post reconcile owed provisional migrate migration db-up db-down db-psql db-destroy hooks frontend-check
 
 help: ## List available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-15s %s\n", $$1, $$2}'
 
 dev: ## Start everything: Postgres, migrations, API (:8080), frontend (:5173)
 	@scripts/dev.sh
+
+demo: ## Run the app on a fake dataset in its own database (nothing real is touched)
+	@scripts/demo.sh
+
+demo-reset: ## Throw the demo database away and fill it again
+	@scripts/demo.sh --reset
 
 test: ## Run backend tests against the test database
 	@scripts/test.sh

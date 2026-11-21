@@ -99,6 +99,7 @@ Full version: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ```bash
 make dev        # Postgres + migrations + API (:8080) + frontend (:5173)
+make demo       # the same, on fake data in its own database (reckon_demo); nothing real is touched
 make test       # backend tests against reckon_test
 make check      # everything CI runs, run before pushing
 make codegen    # after changing backend/src/Reckon/Api/Types.hs
@@ -185,6 +186,11 @@ docs/        see the table above
   instead of hanging it.
 - Anything that depends on "today" reads `env.currentTime` (D072), because every scenario lives in a
   made-up future year. Tests that need a date set it: `env {currentTime = pure (UTCTime day 0)}`.
+- **The demo must keep working and keep matching its README.** `scripts/seed-demo.sh` asserts what
+  `fixtures/demo/README.md` promises and runs in `make check` (`scripts/demo.sh --check`). If a change to
+  posting, matching or reconciliation alters an outcome, fix the code or deliberately update the README and the
+  `expect` lines together. Fake merchants each have their own invented name: a shared word makes the pending-hold matcher
+  (D057) match unrelated rows.
 - Keep decisions in pure modules (`Posting.Classify`, `Reconcile.Explain`)
   and IO in their callers. Pure planners are generic in their id and
   account types so tests can use `Int` and `Text`.

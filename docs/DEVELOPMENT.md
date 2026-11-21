@@ -106,6 +106,26 @@ The API listens on `127.0.0.1` only and answers only to the host names
 the app as `localhost` (not by your LAN address, which gets a 403), and don't
 change `RECKON_HOST` / `RECKON_ALLOWED_HOSTS` unless you mean to expose it.
 
+## Trying it with fake data: `make demo`
+
+`make demo` runs the app on an invented three-month dataset (`fixtures/demo/`), in its **own database**
+(`reckon_demo`, in the same Postgres container), so you can click through everything with no real
+data and no API key. Your development database is never touched, and the seed refuses to run against any other
+database name. It starts the same stack as `make dev` (API on :8080, frontend on :5173).
+
+```bash
+make demo         # create and fill the demo database the first time, then start the app
+make demo-reset   # drop it and fill it again
+scripts/demo.sh --check   # refill it and verify the outcome, without starting the app (part of make check)
+```
+
+The seed (`scripts/seed-demo.sh`) uses the real commands: import, rules, people, post, opening balances,
+statement balances, screenshots, release, a due date. The screenshots are read by `scripts/stub-anthropic.mjs`, a
+local stand-in for the API that serves the fake replies in `fixtures/demo/`, so reckon's real client and
+validation run with no key and no network. It finishes by asserting the outcomes it advertises (three
+screenshot rows confirmed, one released, five statements reconciled, what Sam owes...), so the demo can't quietly
+rot. Where each case is, and the statement balances: [fixtures/demo/README.md](../fixtures/demo/README.md).
+
 ## Using the web UI
 
 The same loop as the command line below, with buttons:
@@ -346,9 +366,10 @@ Run `make` with no arguments to see them all.
 | Command | What it does |
 |---|---|
 | `make dev` | Start everything (see above) |
+| `make demo` / `make demo-reset` | The app on fake data in its own database (see "Trying it with fake data") |
 | `make test` | Backend test suite. Recreates and migrates `reckon_test` first (the journal is append-only, so tests can't clean up) |
 | `cd frontend && npm test` | Frontend tests (Vitest). Also run by `make check` and CI. `npm run lint`, `npm run typecheck` and `npm run build` are the other checks |
-| `make check` | Everything CI runs. **Run before pushing.** It builds the backend with `-Werror` in its own directory (`backend/dist-newstyle-werror`), so the first run after a change to the toolchain compiles the project twice (D073) |
+| `make check` | Everything CI runs, plus the demo dataset check. **Run before pushing.** It builds the backend with `-Werror` in its own directory (`backend/dist-newstyle-werror`), so the first run after a change to the toolchain compiles the project twice (D073) |
 | `make codegen` | Regenerate `frontend/src/api/generated.ts` after changing API types |
 | `make migration name=create_ledger_accounts` | Create a new timestamped SQL migration in `db/migrations/` |
 | `make migrate` | Apply pending migrations to the dev and test databases |

@@ -96,7 +96,7 @@ jobs:
         run: scripts/codegen.sh --check
 
   frontend:
-    name: Frontend (lint, typecheck, build)
+    name: Frontend (lint, typecheck, test, build)
     runs-on: ubuntu-24.04
     defaults:
       run:

@@ -30,6 +30,9 @@ recreate_test_database
 log "Backend: tests"
 (cd backend && cabal test all --ghc-options=-Werror --builddir="$werror_builddir" --test-show-details=direct)
 
+log "The demo dataset loads and comes out as described"
+scripts/demo.sh --check
+
 log "Generated TypeScript is up to date"
 scripts/codegen.sh --check
 
