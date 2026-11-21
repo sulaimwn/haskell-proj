@@ -200,7 +200,8 @@ docs/        see the table above
   sign (money in chequing, money owed on a card). Convert with
   `naturalBalance` at the edges; the ledger stores raw debits (+) and
   credits (−).
-- `make migrate` rewrites `db/schema.sql`. A newer Postgres patch release can
+- `make migrate` rewrites `db/schema.sql` (and so do `make test`, `make check` and `make dev`, which run it).
+  Check `git diff db/schema.sql` right before every commit, not just after the migration you wrote. A newer Postgres patch release can
   add noise to that dump (`ALTER TABLE ... SET (pg_attver=...)` lines, a
   changed "Dumped from database version" comment). Strip it before committing
   so the diff shows only the real schema change.
